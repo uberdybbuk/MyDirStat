@@ -26,11 +26,6 @@ const F64_COLUMNS = ['size', 'alloc', 'mtime'] as const;
 const U32_COLUMNS = ['files', 'dirs'] as const;
 const U8_COLUMNS = ['flags'] as const;
 
-type I32Column = (typeof I32_COLUMNS)[number];
-type F64Column = (typeof F64_COLUMNS)[number];
-type U32Column = (typeof U32_COLUMNS)[number];
-type U8Column = (typeof U8_COLUMNS)[number];
-
 /** Shape handed to `postMessage`; every typed array is transferred, not copied. */
 export interface StoreTransfer {
     count: number;

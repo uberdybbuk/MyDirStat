@@ -167,7 +167,6 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
             i,
             n: store.name(i),
             icon: isDir ? iconForFolder(store.name(i)) : iconForFile(store.name(i)),
-            colorRank: store.colorExt(i),
             size: store.size[i],
             alloc: store.alloc[i],
             files: store.files[i],

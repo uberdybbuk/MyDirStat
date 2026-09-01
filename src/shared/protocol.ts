@@ -27,13 +27,6 @@ export interface TreeRow {
     n: string;
     /** Material Icon Theme icon name; fetch at /icons/<icon>.svg */
     icon: string;
-    /**
-     * Extension rank this row is coloured by, already resolved server-side —
-     * for a directory that is the dominant type beneath it, not -1. Using this
-     * rather than `ext` is what keeps a tree row's colour chip identical to its
-     * tile on the treemap.
-     */
-    colorRank: number;
     size: number;
     alloc: number;
     files: number;
