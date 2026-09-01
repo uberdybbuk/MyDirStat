@@ -48,18 +48,43 @@
 html, body {
     margin: 0;
     height: 100%;
-    overflow: hidden;
     background: var(--bg);
     color: var(--text);
     font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-#app { display: flex; flex-direction: column; height: 100%; }
+/*
+ * One scroll container, not two. Only the body scrolls, and only sideways:
+ * horizontal scrolling is the escape hatch below --app-min-width, while the
+ * app is always exactly viewport-tall so the vertical axis never scrolls.
+ */
+html { overflow: hidden; }
+
+body {
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+/*
+ * A page cannot impose a minimum on the browser window, so it imposes one on
+ * itself: below this width the layout stops collapsing and the body scrolls
+ * instead. Sized to the toolbar's own intrinsic width plus the two panes at
+ * their minimums.
+ */
+:root { --app-min-width: 880px; }
+
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: var(--app-min-width);
+}
 
 /* ------------------------------------------------------------- toolbar --- */
 
 .toolbar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
@@ -67,6 +92,10 @@ html, body {
     border-bottom: 1px solid var(--border);
     flex: none;
 }
+
+/* Every control holds its size; the path input below is the only one that
+   gives way. Without this, flex-shrink squeezes "On disk" onto two lines. */
+.toolbar > * { flex: none; white-space: nowrap; }
 
 .spacer { flex: 1; }
 
@@ -90,11 +119,16 @@ button.primary:hover { filter: brightness(1.1); }
 button.danger { color: var(--danger); }
 button.icon { padding: 5px 9px; }
 
-.path { flex: 1 1 340px; min-width: 160px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.roots { max-width: 150px; }
+.path {
+    flex: 1 1 340px;
+    min-width: 140px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+}
+.roots { max-width: 150px; min-width: 108px; }
 
-.seg { display: flex; }
-.seg button { border-radius: 0; border-right-width: 0; padding: 5px 9px; }
+.seg { display: flex; flex: none; }
+.seg button { border-radius: 0; border-right-width: 0; padding: 5px 9px; white-space: nowrap; }
 .seg button:first-child { border-radius: 6px 0 0 6px; }
 .seg button:last-child { border-radius: 0 6px 6px 0; border-right-width: 1px; }
 .seg button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
@@ -171,6 +205,10 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
     position: absolute; top: 0; right: -3px; width: 7px; height: 100%;
     padding: 0; cursor: col-resize; z-index: 2;
 }
+/* The rightmost pane's last grip must not straddle its edge, or it overhangs
+   the document and forces a permanent 3px horizontal scrollbar. */
+#extPane .pane-head > *:last-child .grip { right: 0; }
+
 .pane-head .grip::before {
     content: ''; position: absolute; left: 3px; top: 5px; bottom: 5px;
     width: 1px; background: var(--border-strong);

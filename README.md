@@ -41,6 +41,11 @@ bar. The server converts to the native separator before it touches the
 filesystem. The per-run token is kept out of the URL and held in `sessionStorage`
 instead, so it survives a reload without ending up in history or a screenshot.
 
+A page cannot impose a minimum size on the browser window, so the layout imposes
+one on itself: toolbar controls never shrink or wrap their labels, the summary
+drops to a second row when space is tight, and below `--app-min-width` (880px)
+the body scrolls horizontally rather than compressing anything.
+
 ## Options
 
 ```
