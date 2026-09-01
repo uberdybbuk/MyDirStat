@@ -140,16 +140,43 @@ button.icon { padding: 5px 9px; }
 main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .row.top { display: flex; min-height: 0; height: 46%; }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
-#treePane { flex: 1 1 auto; }
-#extPane { flex: 0 0 330px; border-left: 1px solid var(--border); }
+#treePane {
+    flex: 1 1 auto;
+    --w-size: 92px;
+    --w-pct: 90px;
+    --w-items: 78px;
+    --w-date: 150px;
+}
+#extPane {
+    flex: 0 0 330px;
+    border-left: 1px solid var(--border);
+    --w-esize: 86px;
+    --w-epct: 78px;
+    --w-ecount: 62px;
+}
 
 .pane-head {
     flex: none; background: var(--bg-raised); border-bottom: 1px solid var(--border);
     font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em;
 }
 .pane-head button, .pane-head span {
+    position: relative;
     background: none; border: none; border-radius: 0; padding: 5px 8px;
     font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; text-align: left;
+}
+
+/* Straddles the column boundary. Sits above the sort button it lives in, and
+   the drag handler swallows the click that would otherwise re-sort. */
+.pane-head .grip {
+    position: absolute; top: 0; right: -3px; width: 7px; height: 100%;
+    padding: 0; cursor: col-resize; z-index: 2;
+}
+.pane-head .grip::before {
+    content: ''; position: absolute; left: 3px; top: 5px; bottom: 5px;
+    width: 1px; background: var(--border-strong);
+}
+.pane-head .grip:hover::before, .pane-head .grip.dragging::before {
+    left: 2px; width: 3px; top: 0; bottom: 0; background: var(--accent); border-radius: 2px;
 }
 .pane-head button:hover { background: var(--row-hover); color: var(--text); }
 .pane-head button.on { color: var(--text); }
@@ -160,8 +187,16 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .rows { position: absolute; inset: 0 0 auto 0; }
 
 /* Tree and header share one grid definition so columns line up exactly. */
-.tree-grid { display: grid; grid-template-columns: minmax(140px, 1fr) 92px 90px 74px 128px; }
-.ext-grid  { display: grid; grid-template-columns: minmax(80px, 1fr) 86px 78px 62px; }
+/* The first column is 1fr and absorbs what the fixed ones give up, so the
+   last column can never be squeezed out of view. */
+.tree-grid {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) var(--w-size) var(--w-pct) var(--w-items) var(--w-date);
+}
+.ext-grid {
+    display: grid;
+    grid-template-columns: minmax(70px, 1fr) var(--w-esize) var(--w-epct) var(--w-ecount);
+}
 
 .trow, .erow {
     height: var(--row-h); align-items: center; cursor: default;
@@ -173,6 +208,7 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .trow > *, .erow > * { overflow: hidden; text-overflow: ellipsis; padding: 0 8px; }
 .num { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
 .dim { color: var(--text-dim); }
+.date { color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .name { display: flex; align-items: center; gap: 4px; padding-left: 0; }
 .twisty {
@@ -187,7 +223,12 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
 /* Share column: a bar behind a right-aligned number. */
 .pct { position: relative; }
-.pct i { position: absolute; left: 8px; top: 6px; bottom: 6px; background: var(--bar); border-radius: 2px; }
+.pct i {
+    position: absolute; left: 8px; top: 6px; bottom: 6px;
+    background: var(--bar); border-radius: 2px;
+    /* --f is the 0..1 share, set inline per row; 16px is the cell padding. */
+    width: calc((100% - 16px) * var(--f, 0));
+}
 .pct span { position: relative; display: block; text-align: right; font-family: ui-monospace, Menlo, monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
 
 /* ------------------------------------------------------------- treemap --- */

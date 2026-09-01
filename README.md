@@ -15,7 +15,8 @@ It scans the directory, starts a loopback HTTP server, and opens a browser on th
 familiar three-pane layout:
 
 - **Directory tree** — subtree sizes, share bars, item counts, modification dates,
-  sortable on any column and expanded lazily.
+  sortable on any column, expanded lazily. Drag a column edge to resize it,
+  double-click the edge to reset it; widths persist per pane.
 - **Extension legend** — every file type with its colour, total size, share and
   file count. Click a row to isolate that type on the map.
 - **Treemap** — a squarified cushion treemap where area is proportional to size

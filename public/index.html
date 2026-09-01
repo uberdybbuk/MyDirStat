@@ -38,10 +38,10 @@
             <section class="pane" id="treePane">
                 <div class="pane-head tree-grid">
                     <button data-sort="name" class="col-name">Name</button>
-                    <button data-sort="size" class="col-num on">Size</button>
-                    <button data-sort="pct" class="col-pct">Share</button>
-                    <button data-sort="items" class="col-num">Items</button>
-                    <button data-sort="mtime" class="col-date">Modified</button>
+                    <button data-sort="size" class="col-num on">Size<span class="grip" data-grip="size" title="Drag to resize, double-click to reset"></span></button>
+                    <button data-sort="pct" class="col-pct">Share<span class="grip" data-grip="pct" title="Drag to resize, double-click to reset"></span></button>
+                    <button data-sort="items" class="col-num">Items<span class="grip" data-grip="items" title="Drag to resize, double-click to reset"></span></button>
+                    <button data-sort="mtime" class="col-date">Modified<span class="grip" data-grip="date" title="Drag to resize, double-click to reset"></span></button>
                 </div>
                 <div class="scroll" id="treeScroll" tabindex="0">
                     <div class="sizer" id="treeSizer"><div class="rows" id="treeRows"></div></div>
@@ -52,7 +52,10 @@
 
             <section class="pane" id="extPane">
                 <div class="pane-head ext-grid">
-                    <span>Type</span><span class="col-num">Size</span><span class="col-pct">Share</span><span class="col-num">Files</span>
+                    <span>Type</span>
+                    <span class="col-num">Size<span class="grip" data-grip="esize" title="Drag to resize, double-click to reset"></span></span>
+                    <span class="col-pct">Share<span class="grip" data-grip="epct" title="Drag to resize, double-click to reset"></span></span>
+                    <span class="col-num">Files<span class="grip" data-grip="ecount" title="Drag to resize, double-click to reset"></span></span>
                 </div>
                 <div class="scroll" id="extScroll">
                     <div id="extRows"></div>

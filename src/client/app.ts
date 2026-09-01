@@ -4,6 +4,7 @@ import { Treemap, type Rgb, type Tile } from './treemap.js';
 import { api } from './api.js';
 import { el, all, escapeHtml, hexToRgb } from './dom.js';
 import { bytes, count, percent, when } from './format.js';
+import { installColumnResizers, TREE_COLUMNS, EXT_COLUMNS } from './columns.js';
 import { F_DIR, F_LINK, F_ERROR, F_SKIPPED, F_DUP } from '../shared/protocol.js';
 import type {
     ExtensionRow, NodeDetail, ScanProgress, ScanSummary,
@@ -187,9 +188,9 @@ function renderTreeWindow(): void {
                     `<span class="label${faded}" title="${escapeHtml(row.n)}">${escapeHtml(row.n)}${suffix}</span>` +
                 `</div>` +
                 `<div class="num">${bytes(value)}</div>` +
-                `<div class="pct"><i style="width:${(share * 74).toFixed(1)}px"></i><span>${percent(share)}</span></div>` +
+                `<div class="pct" style="--f:${share.toFixed(4)}"><i></i><span>${percent(share)}</span></div>` +
                 `<div class="num dim">${isDir ? count(row.files + row.dirs) : ''}</div>` +
-                `<div class="dim">${when(row.mtime)}</div>` +
+                `<div class="date">${when(row.mtime)}</div>` +
             `</div>`
         );
     }
@@ -264,7 +265,7 @@ function renderExtensions(): void {
                     `<div class="name"><span class="swatch" style="background:${r.color}"></span>` +
                     `<span class="label">${escapeHtml(r.label)}</span></div>` +
                     `<div class="num">${bytes(value)}</div>` +
-                    `<div class="pct"><i style="width:${(share * 62).toFixed(1)}px"></i><span>${percent(share)}</span></div>` +
+                    `<div class="pct" style="--f:${share.toFixed(4)}"><i></i><span>${percent(share)}</span></div>` +
                     `<div class="num dim">${count(r.count)}</div>` +
                 `</div>`
             );
@@ -718,6 +719,9 @@ void api.roots().then(({ roots, home }) => {
     const pathInput = el<HTMLInputElement>('path');
     if (!pathInput.value) pathInput.value = home;
 });
+
+installColumnResizers(el('treePane'), TREE_COLUMNS, 'mydirstat.columns.tree');
+installColumnResizers(el('extPane'), EXT_COLUMNS, 'mydirstat.columns.ext');
 
 refreshColors();
 connect();
