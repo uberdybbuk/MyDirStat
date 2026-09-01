@@ -27,6 +27,8 @@ export interface TreeRow {
     n: string;
     /** Material Icon Theme icon name; fetch at /icons/<icon>.svg */
     icon: string;
+    /** Checkbox state: 0 none, 1 partial, 2 all. */
+    sel: number;
     size: number;
     alloc: number;
     files: number;
@@ -154,4 +156,153 @@ export interface ActionResponse {
 
 export interface ErrorResponse {
     error: string;
+}
+
+/* -------------------------------------------------------------- selection -- */
+
+/** Tri-state for a tree row's checkbox. */
+export const SEL_NONE = 0;
+export const SEL_PARTIAL = 1;
+export const SEL_ALL = 2;
+export type SelectionState = typeof SEL_NONE | typeof SEL_PARTIAL | typeof SEL_ALL;
+
+export type SelectionSort = 'size' | 'name' | 'ext' | 'folder' | 'mtime';
+export type SortDirection = 'asc' | 'desc';
+
+export interface SelectionSummary {
+    files: number;
+    bytes: number;
+    /** Everything that could be selected, so a count can be shown as X of Y. */
+    availableFiles: number;
+    availableBytes: number;
+    /** Rough forecast, from per-type compression ratios. */
+    estimatedZipBytes: number;
+    /** Deepest folder containing everything selected; archive paths hang off it. */
+    baseId: number;
+    basePath: string;
+    rules: { included: number; excluded: number; extensions: number[] };
+}
+
+export type SelectionOp =
+    | { op: 'include'; ids: number[] }
+    | { op: 'exclude'; ids: number[] }
+    | { op: 'toggle'; ids: number[] }
+    | { op: 'extension'; ext: number; on: boolean }
+    /** Apply to every file matching a name/path query, across the whole scan. */
+    | { op: 'matching'; text: string; on: boolean }
+    | { op: 'clear' };
+
+/** One hit from the selection dialog's filter. */
+export interface SearchHit {
+    i: number;
+    n: string;
+    /** Path relative to the scan root, for disambiguating same-named files. */
+    rel: string;
+    size: number;
+    icon: string;
+    sel: number;
+}
+
+export interface SearchResponse {
+    /** Files matched in the whole scan; may exceed the number returned. */
+    total: number;
+    hits: SearchHit[];
+}
+
+/* -------------------------------------------------------------------- zip -- */
+
+export type ZipState = 'preparing' | 'archiving' | 'done' | 'failed' | 'cancelled';
+
+/**
+ * `zip` stores each entry independently, so it opens anywhere but cannot match
+ * across files. The tar formats are solid — one continuous stream — which is
+ * where nearly all of the size difference comes from.
+ */
+export type ArchiveFormat = '7z' | 'zip';
+
+export interface ArchiveFormatInfo {
+    id: ArchiveFormat;
+    label: string;
+    detail: string;
+    extension: string;
+    /** Shell command that unpacks it, with %s standing in for the file name. */
+    extract: string;
+}
+
+/**
+ * Both are produced by the same bundled 7-Zip binary. `7z` is solid — one
+ * continuous stream, so matches reach across files — which is where its lead
+ * comes from; measured on 27.5 MB of 1,856 files it produced 2.70 MB against
+ * zip's 5.77 MB. Zip stays available because it opens with no tool at all.
+ */
+export const ARCHIVE_FORMATS: ArchiveFormatInfo[] = [
+    {
+        id: '7z',
+        label: '7z',
+        detail: 'smallest · needs 7-Zip, Keka or similar',
+        extension: '.7z',
+        extract: '7z x %s',
+    },
+    {
+        id: 'zip',
+        label: 'zip',
+        detail: 'largest · opens anywhere',
+        extension: '.zip',
+        extract: 'unzip %s',
+    },
+];
+
+export interface ZipSkip {
+    path: string;
+    reason: string;
+}
+
+export interface ZipStatus {
+    id: string;
+    state: ZipState;
+    files: number;
+    filesDone: number;
+    bytesTotal: number;
+    bytesRead: number;
+    bytesWritten: number;
+    currentPath: string;
+    startedAt: number;
+    finishedAt?: number;
+    error?: string;
+    skipped: ZipSkip[];
+    name: string;
+    size?: number;
+    format: ArchiveFormat;
+}
+
+/* ----------------------------------------------------------------- delete -- */
+
+export type DeleteMode = 'trash' | 'permanent';
+export type DeleteState = 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface DeleteTarget {
+    id: number;
+    path: string;
+    label: string;
+    size: number;
+}
+
+export interface DeleteFailure {
+    path: string;
+    reason: string;
+}
+
+export interface DeleteStatus {
+    id: string;
+    state: DeleteState;
+    mode: DeleteMode;
+    files: number;
+    filesDone: number;
+    bytesFreed: number;
+    bytesTotal: number;
+    currentPath: string;
+    failures: DeleteFailure[];
+    startedAt: number;
+    finishedAt?: number;
+    error?: string;
 }

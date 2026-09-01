@@ -15,14 +15,11 @@
         <input id="path" class="path" spellcheck="false" autocomplete="off" placeholder="Directory to scan">
         <select id="roots" class="roots" title="Volumes"></select>
         <button id="scan" class="primary">Scan</button>
-        <button id="cancel" hidden>Cancel</button>
+        <button id="cancel" class="danger" hidden>Stop</button>
+        <button id="pick">Select&hellip;</button>
 
         <span class="spacer"></span>
 
-        <div class="seg" role="group" aria-label="Size metric">
-            <button data-metric="alloc" class="on" title="Space actually occupied on disk">On disk</button>
-            <button data-metric="size" title="Sum of file lengths">Apparent</button>
-        </div>
         <div id="summary" class="summary"></div>
     </header>
 
@@ -52,7 +49,7 @@
 
             <section class="pane" id="extPane">
                 <div class="pane-head ext-grid">
-                    <span>Type</span>
+                    <span class="col-type">Type</span>
                     <span class="col-num">Size<span class="grip" data-grip="esize" title="Drag to resize, double-click to reset"></span></span>
                     <span class="col-pct">Share<span class="grip" data-grip="epct" title="Drag to resize, double-click to reset"></span></span>
                     <span class="col-num">Files<span class="grip" data-grip="ecount" title="Drag to resize, double-click to reset"></span></span>
@@ -86,6 +83,89 @@
     <hr>
     <button data-op="trash" class="danger">Move to Trash</button>
     <button data-op="delete" class="danger">Delete permanently&hellip;</button>
+</div>
+
+<div id="picker" class="modal" hidden>
+    <div class="sheet wide" id="pickerSheet">
+        <header class="review-head">
+            <h2>Select files</h2>
+            <span id="pickerTotals" class="dim"></span>
+            <button id="pickerClose" class="icon" title="Close">&times;</button>
+        </header>
+
+        <div class="review-filters">
+            <input id="pickerFilter" type="search" placeholder="Filter file names, or a path fragment&hellip;" spellcheck="false">
+            <span id="pickerBulk" class="bulk" hidden>
+                <button id="pickerTakeAll">Select all</button>
+                <button id="pickerDropAll">Deselect all</button>
+            </span>
+        </div>
+
+        <div class="scroll picker-scroll" id="pickerScroll">
+            <div class="sizer" id="pickerSizer"><div class="rows" id="pickerRows"></div></div>
+        </div>
+
+        <div class="sheet-actions">
+            <span id="pickerNote" class="dim"></span>
+            <span class="spacer"></span>
+            <label class="fmt">
+                Format
+                <select id="pickerFormat"></select>
+            </label>
+            <button id="pickerTrash" class="danger">Move to Trash</button>
+            <button id="pickerErase" class="danger">Delete permanently&hellip;</button>
+            <button id="pickerClear">Clear</button>
+            <button id="pickerDone">Close</button>
+            <button id="pickerZip" class="primary">Compress &amp; Download</button>
+        </div>
+    </div>
+</div>
+
+<div id="confirmDelete" class="modal" hidden>
+    <div class="sheet">
+        <h2>Delete permanently</h2>
+        <p id="confirmBody" class="dim"></p>
+        <p class="dim">Type the file count to confirm:</p>
+        <input id="confirmInput" type="text" inputmode="numeric" autocomplete="off" spellcheck="false">
+        <div class="sheet-actions">
+            <span class="spacer"></span>
+            <button id="confirmCancel">Cancel</button>
+            <button id="confirmGo" class="danger" disabled>Delete permanently</button>
+        </div>
+    </div>
+</div>
+
+<div id="delModal" class="modal" hidden>
+    <div class="sheet">
+        <h2 id="delTitle">Deleting</h2>
+        <div class="bar"><i id="delBar"></i></div>
+        <p id="delDetail" class="dim"></p>
+        <p id="delPath" class="zip-path"></p>
+        <div class="sheet-actions">
+            <span class="spacer"></span>
+            <button id="delCancel">Cancel</button>
+            <button id="delClose" hidden>Close</button>
+        </div>
+    </div>
+</div>
+
+<div id="zipModal" class="modal" hidden>
+    <div class="sheet">
+        <h2 id="zipTitle">Creating archive</h2>
+        <div class="bar"><i id="zipBar"></i></div>
+        <p id="zipDetail" class="dim"></p>
+        <p id="zipPath" class="zip-path"></p>
+        <div id="zipHowto" class="howto" hidden>
+            <span class="howto-label">Unpack with</span>
+            <code id="zipCommand"></code>
+        </div>
+        <div class="sheet-actions">
+            <span class="spacer"></span>
+            <button id="zipCancel">Cancel</button>
+            <button id="zipDownload" class="primary" hidden>Download</button>
+            <button id="zipClose" hidden>Close</button>
+        </div>
+    </div>
 </div>
 
 <div id="modal" class="modal" hidden>

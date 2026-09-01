@@ -8,7 +8,8 @@
 import type {
     ActionOp, ActionResponse, AncestorsResponse, ChildrenResponse,
     ExtensionsResponse, NodeDetail, RootsResponse, ScanSummary,
-    SizeMetric, TreemapResponse,
+    SearchResponse, SelectionOp, SelectionSummary,
+    DeleteStatus, SizeMetric, TreemapResponse, ZipStatus,
 } from '../shared/protocol.js';
 
 import { encodePathParam } from '../shared/paths.js';
@@ -87,4 +88,20 @@ export const api = {
     cancel: () => post<{ ok: true }>('/api/cancel', {}),
     action: (op: ActionOp, id: number) => post<ActionResponse>('/api/action', { op, id }),
     events: () => new EventSource(`/api/events?t=${encodeURIComponent(TOKEN)}`),
+
+    selectionSummary: () => request<SelectionSummary>('/api/selection'),
+    selection: (op: SelectionOp) => post<SelectionSummary>('/api/selection', op),
+    search: (text: string, limit: number) =>
+        request<SearchResponse>(`/api/search?text=${encodeURIComponent(text)}&limit=${limit}`),
+
+    zip: (format: string) => post<ZipStatus>('/api/zip', { format }),
+    zipStatus: (id: string) => request<ZipStatus>(`/api/zip/status?id=${encodeURIComponent(id)}`),
+    zipCancel: (id: string) => post<{ ok: true }>('/api/zip/cancel', { id }),
+
+    deleteSelection: (mode: 'trash' | 'permanent', confirm?: number) =>
+        post<DeleteStatus>('/api/delete', { mode, confirm }),
+    deleteCancel: () => post<{ ok: true }>('/api/delete/cancel', {}),
+    /** Plain navigation, so the browser handles the save dialog itself. */
+    zipDownloadUrl: (id: string) =>
+        `/api/zip/download?id=${encodeURIComponent(id)}&t=${encodeURIComponent(TOKEN)}`,
 };

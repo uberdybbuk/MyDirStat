@@ -5,13 +5,24 @@ import { api, requestedPath, setUrlPath } from './api.js';
 import { el, all, escapeHtml, hexToRgb } from './dom.js';
 import { bytes, count, percent, when } from './format.js';
 import { installColumnResizers, TREE_COLUMNS, EXT_COLUMNS } from './columns.js';
-import { F_DIR, F_LINK, F_ERROR, F_SKIPPED, F_DUP } from '../shared/protocol.js';
+import { initPicker, openPicker, closePicker, isOpen as isPickerOpen, selectedFormat } from './select-dialog.js';
+import { ARCHIVE_FORMATS, F_DIR, F_LINK, F_ERROR, F_SKIPPED, F_DUP } from '../shared/protocol.js';
 import type {
     ExtensionRow, NodeDetail, ScanProgress, ScanSummary,
-    SizeMetric, SpecialColors, TreeRow, TreemapNode,
+    DeleteStatus, SelectionSummary, SizeMetric, SpecialColors, TreeRow, TreemapNode, ZipStatus,
 } from '../shared/protocol.js';
 
 const ROW_H = 22;
+
+/**
+ * Sizes are reported as apparent — the sum of file lengths — everywhere.
+ *
+ * The on-disk figure (block-rounded allocation) is what answers "how much space
+ * will I get back", and the server still computes and serves it; only the UI
+ * switch is gone. Flip this back to 'alloc' and restore the toolbar control to
+ * bring it back.
+ */
+const METRIC: SizeMetric = 'size';
 
 // Smallest tile worth sending, in device pixels. Small on purpose: a higher
 // floor folds most individual files away, and the folded mass then dominates
@@ -26,7 +37,6 @@ interface VisibleRow {
 }
 
 interface State {
-    metric: SizeMetric;
     status: ScanSummary['status'];
     summary: ScanSummary | null;
     zoom: number;
@@ -43,10 +53,11 @@ interface State {
     highlight: number | null;
     sort: { key: SortKey; dir: 1 | -1 };
     menuTarget: number | null;
+    selection: SelectionSummary | null;
+    zipId: string | null;
 }
 
 const state: State = {
-    metric: 'alloc',
     status: 'idle',
     summary: null,
     zoom: 0,
@@ -63,9 +74,11 @@ const state: State = {
     highlight: null,
     sort: { key: 'size', dir: -1 },
     menuTarget: null,
+    selection: null,
+    zipId: null,
 };
 
-const valueOf = (row: TreeRow | NodeDetail): number => (state.metric === 'size' ? row.size : row.alloc);
+const valueOf = (row: TreeRow | NodeDetail): number => row.size;
 
 /* ------------------------------------------------------------- treemap ---- */
 
@@ -100,7 +113,7 @@ let mapRequest = 0;
 async function loadTreemap(): Promise<void> {
     if (state.status !== 'ready') return;
     const seq = ++mapRequest;
-    const data = await api.treemap(state.zoom, state.metric, mapArea(), MIN_TILE);
+    const data = await api.treemap(state.zoom, METRIC, mapArea(), MIN_TILE);
     if (seq !== mapRequest) return; // a newer request already won
     map.setData(data.root);
     map.render();
@@ -253,14 +266,15 @@ async function loadExtensions(): Promise<void> {
 }
 
 function renderExtensions(): void {
-    const total = state.extensions.reduce((a, r) => a + (state.metric === 'size' ? r.size : r.alloc), 0) || 1;
+    const total = state.extensions.reduce((a, r) => a + r.size, 0) || 1;
     el('extRows').innerHTML = state.extensions
         .map((r) => {
-            const value = state.metric === 'size' ? r.size : r.alloc;
+            const value = r.size;
             const share = value / total;
             return (
                 `<div class="erow ext-grid${state.highlight === r.rank ? ' sel' : ''}" data-rank="${r.rank}">` +
-                    `<div class="name"><span class="swatch" style="background:${r.color}"></span>` +
+                    `<div class="name">` +
+                    `<span class="swatch" style="background:${r.color}"></span>` +
                     `<img class="ficon" src="/icons/${encodeURIComponent(r.icon)}.svg" alt="" loading="lazy" decoding="async">` +
                     `<span class="label">${escapeHtml(r.label)}</span></div>` +
                     `<div class="num">${bytes(value)}</div>` +
@@ -270,6 +284,17 @@ function renderExtensions(): void {
             );
         })
         .join('');
+}
+
+/* ----------------------------------------------------------- selection ---- */
+
+/**
+ * Selection lives entirely in the select dialog. The main window is a read-only
+ * view of disk usage and deliberately shows no trace of what is picked, so
+ * browsing and choosing stay separate activities.
+ */
+function applySelection(summary: SelectionSummary): void {
+    state.selection = summary;
 }
 
 /* ---------------------------------------------------------- breadcrumbs --- */
@@ -343,7 +368,7 @@ function setStatus(summary: ScanSummary): void {
     el<HTMLButtonElement>('scan').disabled = scanning;
 
     if (summary.status === 'ready') {
-        const total = state.metric === 'size' ? summary.size ?? 0 : summary.alloc ?? 0;
+        const total = summary.size ?? 0;
         el('summary').innerHTML =
             `<b>${bytes(total)}</b> in <b>${count(summary.files ?? 0)}</b> files, ` +
             `<b>${count(summary.dirs ?? 0)}</b> folders ` +
@@ -370,6 +395,7 @@ async function afterScan(summary: ScanSummary): Promise<void> {
     state.expanded.add(0);
 
     await loadExtensions();
+    applySelection(await api.selectionSummary());
     rebuildVisible();
     await renderCrumbs();
     await loadTreemap();
@@ -410,6 +436,12 @@ function connect(): void {
     events.addEventListener('done', (e) => {
         void afterScan(JSON.parse((e as MessageEvent<string>).data) as ScanSummary);
     });
+    events.addEventListener('delete', (e) => {
+        renderDelete(JSON.parse((e as MessageEvent<string>).data) as DeleteStatus);
+    });
+    events.addEventListener('zip', (e) => {
+        renderZip(JSON.parse((e as MessageEvent<string>).data) as ZipStatus);
+    });
     events.addEventListener('failed', (e) => {
         const { message } = JSON.parse((e as MessageEvent<string>).data) as { message: string };
         setStatus({ status: 'error', root: state.summary?.root ?? null, error: message });
@@ -436,16 +468,6 @@ el('up').onclick = () => {
     if (parent !== current) void api.scan(parent).catch(reportError);
 };
 
-for (const button of all<HTMLButtonElement>('.seg button')) {
-    button.onclick = async () => {
-        for (const b of all<HTMLButtonElement>('.seg button')) b.classList.toggle('on', b === button);
-        state.metric = button.dataset.metric === 'size' ? 'size' : 'alloc';
-        if (state.summary) setStatus(state.summary);
-        renderExtensions();
-        rebuildVisible();
-        await loadTreemap();
-    };
-}
 
 for (const button of all<HTMLButtonElement>('.pane-head [data-sort]')) {
     button.onclick = () => {
@@ -628,6 +650,8 @@ addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     closeMenu();
     if (!el('modal').hidden) el('modalCancel').click();
+    else if (!el('confirmDelete').hidden) el('confirmCancel').click();
+    else if (isPickerOpen()) closePicker();
 });
 
 menu.addEventListener('click', (e) => {
@@ -701,6 +725,163 @@ el('modalConfirm').onclick = () => {
     el('modal').hidden = true;
     confirmHandler?.();
     confirmHandler = null;
+};
+
+/* ---------------------------------------------------------- selection UI -- */
+
+el('pick').onclick = () => void openPicker();
+el('pickerZip').onclick = () => {
+    closePicker();
+    void startZip();
+};
+
+initPicker(applySelection);
+
+/* ------------------------------------------------------------------ zip --- */
+
+function renderZip(status: ZipStatus): void {
+    state.zipId = status.id;
+    el('zipModal').hidden = false;
+
+    const done = status.state === 'done';
+    const running = status.state === 'archiving' || status.state === 'preparing';
+    const fraction = status.bytesTotal > 0 ? status.bytesRead / status.bytesTotal : 0;
+
+    el('zipTitle').textContent =
+        done ? 'Archive ready'
+        : status.state === 'failed' ? 'Archive failed'
+        : status.state === 'cancelled' ? 'Archive cancelled'
+        : 'Creating archive';
+
+    el<HTMLElement>('zipBar').style.width = `${Math.round((done ? 1 : fraction) * 100)}%`;
+
+    if (done) {
+        const ratio = status.bytesRead > 0 ? 1 - (status.size ?? 0) / status.bytesRead : 0;
+        el('zipDetail').textContent =
+            `${count(status.files)} files · ${bytes(status.size ?? 0)}` +
+            ` (${(ratio * 100).toFixed(0)}% smaller than ${bytes(status.bytesRead)})`;
+    } else if (status.state === 'failed') {
+        el('zipDetail').textContent = status.error ?? 'Unknown error';
+    } else {
+        el('zipDetail').textContent =
+            `${count(status.filesDone)} / ${count(status.files)} files · ` +
+            `${bytes(status.bytesRead)} read · ${bytes(status.bytesWritten)} written`;
+    }
+
+    if (status.skipped.length > 0) {
+        el('zipDetail').textContent += ` · ${count(status.skipped.length)} skipped`;
+    }
+    el('zipPath').textContent = running ? status.currentPath : '';
+
+    // The app picked the format, so it also says how to unpack it rather than
+    // leaving the user to discover that .tar.br has no common desktop tool.
+    const howto = el('zipHowto');
+    howto.hidden = !done;
+    if (done) {
+        const info = ARCHIVE_FORMATS.find((f) => f.id === status.format);
+        el('zipCommand').textContent = (info?.extract ?? 'unzip %s')
+            .replace(/%s/g, status.name)
+            .replace(/%t/g, status.name.replace(/\.(br|zst)$/, ''));
+    }
+
+    el('zipCancel').hidden = !running;
+    el('zipDownload').hidden = !done;
+    el('zipClose').hidden = running;
+}
+
+async function startZip(): Promise<void> {
+    try {
+        renderZip(await api.zip(selectedFormat()));
+    } catch (err) {
+        reportError(err);
+    }
+}
+
+el('zipCancel').onclick = () => {
+    if (state.zipId) void api.zipCancel(state.zipId).catch(reportError);
+};
+el('zipClose').onclick = () => {
+    el('zipModal').hidden = true;
+    state.zipId = null;
+};
+el('zipDownload').onclick = () => {
+    if (!state.zipId) return;
+    // Plain navigation so the browser owns the save dialog; the response is an
+    // attachment, so the page itself is not replaced.
+    location.href = api.zipDownloadUrl(state.zipId);
+    el('zipModal').hidden = true;
+    state.zipId = null;
+};
+
+/* --------------------------------------------------------------- delete --- */
+
+function renderDelete(status: DeleteStatus): void {
+    el('delModal').hidden = false;
+    const running = status.state === 'running';
+    const fraction = status.files > 0 ? status.filesDone / status.files : 0;
+
+    el('delTitle').textContent =
+        status.state === 'done' ? (status.mode === 'trash' ? 'Moved to Trash' : 'Deleted')
+        : status.state === 'failed' ? 'Delete failed'
+        : status.state === 'cancelled' ? 'Delete cancelled'
+        : status.mode === 'trash' ? 'Moving to Trash' : 'Deleting';
+
+    el<HTMLElement>('delBar').style.width = `${Math.round(fraction * 100)}%`;
+
+    const parts = [`${count(status.filesDone)} / ${count(status.files)} files`, `${bytes(status.bytesFreed)} freed`];
+    if (status.failures.length > 0) parts.push(`${count(status.failures.length)} failed`);
+    if (status.error) parts.push(status.error);
+    el('delDetail').textContent = parts.join(' · ');
+    el('delPath').textContent = running ? status.currentPath : '';
+
+    el('delCancel').hidden = !running;
+    el('delClose').hidden = running;
+}
+
+async function startDelete(mode: 'trash' | 'permanent', confirm?: number): Promise<void> {
+    try {
+        renderDelete(await api.deleteSelection(mode, confirm));
+    } catch (err) {
+        reportError(err);
+    }
+}
+
+el('delCancel').onclick = () => void api.deleteCancel().catch(reportError);
+el('delClose').onclick = () => {
+    el('delModal').hidden = true;
+};
+
+el('pickerTrash').onclick = () => {
+    closePicker();
+    void startDelete('trash');
+};
+
+el('pickerErase').onclick = () => {
+    const total = state.selection?.files ?? 0;
+    if (total === 0) return;
+    el('confirmBody').textContent =
+        `${count(total)} files (${bytes(state.selection?.bytes ?? 0)}) will be removed for good. ` +
+        `They do not go to the Trash and cannot be recovered.`;
+    const input = el<HTMLInputElement>('confirmInput');
+    input.value = '';
+    const go = el<HTMLButtonElement>('confirmGo');
+    go.disabled = true;
+    input.oninput = () => {
+        const ok = input.value.trim() === String(total);
+        go.disabled = !ok;
+        input.classList.toggle('match', ok);
+    };
+    el('confirmDelete').hidden = false;
+    input.focus();
+};
+
+el('confirmCancel').onclick = () => {
+    el('confirmDelete').hidden = true;
+};
+el('confirmGo').onclick = () => {
+    el('confirmDelete').hidden = true;
+    closePicker();
+    void startDelete('permanent', state.selection?.files ?? 0);
 };
 
 /* ------------------------------------------------------------ splitters --- */

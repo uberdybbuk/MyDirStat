@@ -21,10 +21,17 @@ import { colorForRank, extensionLabel, SPECIAL_COLORS } from './palette.js';
 import { NodeStore } from './store.js';
 import { iconForExtension, iconForFile, iconForFolder, iconFilePath } from './icons.js';
 import { toDisplayPath, toNativePath } from './paths.js';
+import { Selection, isPrecompressed } from './selection.js';
+import { ArchiveManager, type ArchiveEntry } from './archive.js';
+import { DeleteJob } from './delete-job.js';
+import { createReadStream } from 'node:fs';
+import { basename } from 'node:path';
 import { F_DIR } from '../shared/protocol.js';
+import { ARCHIVE_FORMATS } from '../shared/protocol.js';
 import type {
-    ActionRequest, BrowseResponse, ExtensionRow, RootsResponse,
-    ScanProgress, ScanStatus, ScanSummary, SizeMetric, TreeRow,
+    ActionRequest, ArchiveFormat, BrowseResponse, DeleteMode, DeleteTarget, ExtensionRow, RootsResponse,
+    ScanProgress, ScanStatus, ScanSummary, SearchHit, SearchResponse,
+    SelectionOp, SelectionSummary, SizeMetric, TreeRow,
 } from '../shared/protocol.js';
 import * as actions from './actions.js';
 
@@ -77,7 +84,11 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
     };
 
     let active: ScanHandle | null = null;
+    let selection: Selection | null = null;
     const listeners = new Set<ServerResponse>();
+
+    const zips = new ArchiveManager((job) => broadcast('zip', job.status()));
+    let deletion: DeleteJob | null = null;
 
     function broadcast(event: string, data: unknown): void {
         const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -110,6 +121,8 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 if (active !== handle) return; // superseded by a newer scan
                 active = null;
                 state.store = store;
+                // Node ids only mean anything within one scan.
+                selection = new Selection(store);
                 state.status = 'ready';
                 state.finishedAt = Date.now();
                 broadcast('done', summary());
@@ -167,6 +180,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
             i,
             n: store.name(i),
             icon: isDir ? iconForFolder(store.name(i)) : iconForFile(store.name(i)),
+            sel: selection ? selection.state(i) : 0,
             size: store.size[i],
             alloc: store.alloc[i],
             files: store.files[i],
@@ -451,6 +465,199 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 if (!store) return send(res, 409, { error: 'No completed scan' });
                 if (id === null) return send(res, 400, { error: 'Bad node id' });
                 return send(res, 200, { ...row(store, id), path: displayPathOf(store, id) });
+            }
+
+            case '/api/selection': {
+                if (!store || !selection) return send(res, 409, { error: 'No completed scan' });
+
+                if (req.method === 'POST') {
+                    const body = await readJson<SelectionOp>(req);
+                    switch (body.op) {
+                        case 'include': selection.include(body.ids); break;
+                        case 'exclude': selection.exclude(body.ids); break;
+                        case 'toggle': selection.toggle(body.ids); break;
+                        case 'extension': selection.setExtension(body.ext, body.on); break;
+                        case 'matching': {
+                            const { ids } = selection.searchAll(body.text, Number.MAX_SAFE_INTEGER);
+                            if (body.on) selection.include(ids);
+                            else selection.exclude(ids);
+                            break;
+                        }
+                        case 'clear': selection.clear(); break;
+                        default: return send(res, 400, { error: 'Unknown selection op' });
+                    }
+                }
+
+                const resolved = selection.resolve();
+                const available = selection.available();
+                const body: SelectionSummary = {
+                    files: resolved.totalFiles,
+                    bytes: resolved.totalBytes,
+                    availableFiles: available.files,
+                    availableBytes: available.bytes,
+                    estimatedZipBytes: resolved.estimatedBytes,
+                    baseId: resolved.baseId,
+                    basePath: displayPathOf(store, resolved.baseId),
+                    rules: selection.ruleCounts,
+                };
+                return send(res, 200, body);
+            }
+
+            case '/api/selection/states': {
+                // Selection state for arbitrary nodes. Lets a client assert that
+                // what it renders matches what the server actually thinks.
+                if (req.method !== 'POST') return send(res, 405, { error: 'Use POST' });
+                if (!store || !selection) return send(res, 409, { error: 'No completed scan' });
+                const { ids } = await readJson<{ ids: number[] }>(req);
+                const states = ids.map((n) =>
+                    Number.isInteger(n) && n >= 0 && n < store.count ? selection!.state(n) : 0
+                );
+                return send(res, 200, { states }, {}, accept);
+            }
+
+            case '/api/search': {
+                if (!store || !selection) return send(res, 409, { error: 'No completed scan' });
+                const text = (url.searchParams.get('text') ?? '').trim();
+                const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 300));
+                if (text.length === 0) return send(res, 200, { total: 0, hits: [] });
+
+                const { ids, total } = selection.searchAll(text, limit);
+                const hits: SearchHit[] = ids.map((id) => ({
+                    i: id,
+                    n: store.name(id),
+                    rel: store.segments(id).join('/'),
+                    size: store.size[id],
+                    icon: iconForFile(store.name(id)),
+                    sel: selection!.state(id),
+                }));
+                return send(res, 200, { total, hits } satisfies SearchResponse, {}, accept);
+            }
+
+            case '/api/zip': {
+                if (req.method !== 'POST') return send(res, 405, { error: 'Use POST' });
+                if (!store || !selection) return send(res, 409, { error: 'No completed scan' });
+                const resolved = selection.resolve();
+                if (resolved.totalFiles === 0) return send(res, 400, { error: 'Nothing selected' });
+
+                const base = resolved.baseId;
+                const entries: ArchiveEntry[] = Array.from(resolved.ids, (id) => {
+                    const name = store.name(id);
+                    return {
+                        path: pathOf(store, id),
+                        entry: selection!.entryName(id, base),
+                        size: store.size[id],
+                        mtime: store.mtime[id],
+                        stored: isPrecompressed(name),
+                    };
+                });
+
+                const requested = (await readJson<{ format?: ArchiveFormat }>(req)).format;
+                const format: ArchiveFormat = requested === 'zip' ? 'zip' : '7z';
+                const info = ARCHIVE_FORMATS.find((f) => f.id === format)!;
+
+                const stamp = new Date().toISOString().slice(0, 10);
+                const label = basename(pathOf(store, base)) || 'archive';
+                const job = zips.start({
+                    entries,
+                    // Entry paths are relative to the selection's common base,
+                    // so that is where 7-Zip has to run.
+                    baseDir: pathOf(store, base),
+                    name: `${label}-${stamp}${info.extension}`,
+                    format,
+                });
+                return send(res, 202, job.status());
+            }
+
+            case '/api/delete': {
+                if (req.method !== 'POST') return send(res, 405, { error: 'Use POST' });
+                if (!store || !selection) return send(res, 409, { error: 'No completed scan' });
+                if (deletion && deletion.state === 'running') {
+                    return send(res, 409, { error: 'A deletion is already running' });
+                }
+
+                const body = await readJson<{ mode?: DeleteMode; confirm?: number }>(req);
+                const mode: DeleteMode = body.mode === 'permanent' ? 'permanent' : 'trash';
+                const resolved = selection.resolve();
+                if (resolved.totalFiles === 0) return send(res, 400, { error: 'Nothing selected' });
+
+                // Permanent removal has no undo, so the client has to echo the
+                // exact count back. A stale dialog therefore cannot delete a
+                // selection the user never saw.
+                if (mode === 'permanent' && body.confirm !== resolved.totalFiles) {
+                    return send(res, 409, {
+                        error: `Confirmation does not match the selection (${resolved.totalFiles} files)`,
+                    });
+                }
+
+                const targets: DeleteTarget[] = Array.from(resolved.ids, (id) => ({
+                    id,
+                    path: pathOf(store, id),
+                    label: store.segments(id).join('/'),
+                    size: store.size[id],
+                }));
+                // Never act outside the tree that was actually scanned.
+                for (const target of targets) {
+                    if (!actions.isInside(store.root, target.path)) {
+                        return send(res, 403, { error: 'Target is outside the scan root' });
+                    }
+                }
+
+                deletion = new DeleteJob(
+                    targets,
+                    mode,
+                    (id) => detach(store, id),
+                    (job) => broadcast('delete', job.status())
+                );
+                void deletion.done.then(() => {
+                    // The rules point at nodes that no longer exist.
+                    selection?.clear();
+                    broadcast('done', summary());
+                });
+                return send(res, 202, deletion.status());
+            }
+
+            case '/api/delete/status': {
+                if (!deletion) return send(res, 404, { error: 'No deletion' });
+                return send(res, 200, deletion.status());
+            }
+
+            case '/api/delete/cancel': {
+                if (req.method !== 'POST') return send(res, 405, { error: 'Use POST' });
+                deletion?.cancel();
+                return send(res, 200, { ok: true });
+            }
+
+            case '/api/zip/cancel': {
+                if (req.method !== 'POST') return send(res, 405, { error: 'Use POST' });
+                const { id } = await readJson<{ id: string }>(req);
+                zips.get(id)?.cancel();
+                return send(res, 200, { ok: true });
+            }
+
+            case '/api/zip/status': {
+                const job = zips.get(url.searchParams.get('id') ?? '');
+                if (!job) return send(res, 404, { error: 'No such job' });
+                return send(res, 200, job.status());
+            }
+
+            case '/api/zip/download': {
+                const job = zips.get(url.searchParams.get('id') ?? '');
+                if (!job) return send(res, 404, { error: 'No such job' });
+                if (job.state !== 'done') return send(res, 409, { error: `Archive is ${job.state}` });
+
+                res.writeHead(200, {
+                    'content-type': 'application/zip',
+                    'content-length': String(job.size ?? 0),
+                    // The filename is derived from a scanned directory name, so
+                    // quotes and newlines are stripped rather than trusted.
+                    'content-disposition': `attachment; filename="${job.name.replace(/["\r\n]/g, '')}"`,
+                    'cache-control': 'no-store',
+                });
+                const body = createReadStream(job.file);
+                body.pipe(res);
+                // The archive is disposable once it has been handed over.
+                res.on('close', () => void zips.remove(job.id));
+                return;
             }
 
             case '/api/action': {

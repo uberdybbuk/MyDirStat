@@ -12,7 +12,8 @@ node bin/mydirstat.js ~/Projects
 `npm run watch` rebuilds on change; `npm test` runs the layout suite.
 
 It scans the directory, starts a loopback HTTP server, and opens a browser on the
-familiar three-pane layout:
+familiar three-pane layout. A long scan can be interrupted with **Stop**, which
+keeps whatever was found so far and leaves the tree fully usable.
 
 - **Directory tree** — subtree sizes, share bars, item counts, modification dates,
   sortable on any column, expanded lazily, with Material file and folder icons.
@@ -84,8 +85,9 @@ Node types, and `src/shared` + `src/client` to `public/js/` under DOM types.
 boundary instead of trusted, and the flag bits have one definition rather than
 a copy in the client that can drift out of step with the scanner.
 
-There are two dependencies: TypeScript, which is dev-only, and
-`material-icon-theme`, which is data — SVGs and a mapping table, no code.
+Runtime dependencies are `material-icon-theme` (data: SVGs and a mapping
+table, no code) and `yazl` (zip writing, including ZIP64). TypeScript is
+dev-only.
 
 ## How it works
 
@@ -145,6 +147,99 @@ icon, so the link back to the tile's colour on the map survives.
 The server resolves an icon name per row and serves the SVG from
 `/icons/<name>.svg`, validated against the manifest's own definitions — an
 allowlist, so a request cannot traverse out of the icon directory.
+
+## Selecting and archiving
+
+**Select…** in the toolbar opens a checkbox tree over the scan. Everything —
+picking, archiving, deleting — happens inside that dialog; the main window never
+changes in response to a selection, so browsing disk usage and choosing files
+stay separate activities. Tick individual
+files or whole folders, or type a name or path fragment to filter and take the
+whole match in one click. All picking happens in that dialog: the main tree pane
+stays a read-only view of disk usage, so browsing can never change what is about
+to be archived. The dialog keeps its selection between openings.
+
+A decision on a folder is a statement about its whole subtree: ticking or
+unticking one clears any rule already sitting beneath it. Without that, a
+folder's checkbox looks inert — nearest-rule-wins would let per-file rules made
+earlier (by *Select all N*, say) keep beating the folder's own decision.
+
+Selection is stored as **rules, not a list of files**. "Everything under
+node_modules" is one entry rather than 268,000, "every .mp4" is one entry rather
+than 53,000, and the nearest rule to a node wins — so *take `src/`, drop
+`src/lib/`, but keep `src/lib/util.ts`* is three rules. Resolving that for every
+node is one forward pass, since a parent's decision is settled before its
+children are reached; a reverse pass then rolls up per-subtree totals, which is
+what gives tri-state folder checkboxes and live byte counts.
+
+Selection state is computed on the server, so after any change the dialog drops
+its row cache entirely and refetches what is on screen, reloading the rest when
+it is expanded again. Refreshing only the expanded folders is not enough: a
+collapsed folder's rows come back the moment it is re-expanded, and collapsing a
+folder does not un-expand its descendants, so a deeper folder can stay fresh
+while its own parent goes stale.
+
+Counts are always shown against the whole scan — *25 of 2,106 files · 183 KB of
+28.3 MB* — so the size of what you are choosing from is never hidden. Sizes in
+the dialog are logical bytes, which is what an archive holds; the main window's
+figures follow its own on-disk/apparent toggle, so the two legitimately differ.
+
+The dialog is resizable from its bottom-right corner and remembers the size,
+clamped to the current viewport so a size set on an external monitor does not
+come back off-screen on a laptop.
+
+The filter searches every file in the scan, not just the selected ones, so it
+can find things to add. Names are matched directly; a query containing `/` is
+matched against the relative path instead, which is the slower path and only
+taken when asked for.
+
+### Compression
+
+Archives are produced by 7-Zip, run as a child process. The binary comes from
+the `7zip-bin` package rather than the host, so nothing has to be installed on
+the machine doing the compressing — it ships builds for Windows, macOS and Linux
+across x64, arm64, ia32 and arm.
+
+| format | 27.5 MB tree, 1,856 files | time | unpack with |
+| --- | --- | --- | --- |
+| `7z` | **2.70 MB** | 3.7 s | `7z x` — 7-Zip, Keka, The Unarchiver |
+| `zip` | 5.77 MB | 4.3 s | `unzip`, Finder, Explorer |
+
+`7z` is solid: one continuous stream, so matches reach across file boundaries.
+That is where the lead comes from, not the algorithm — with the same LZMA2
+settings, solid gave 2.70 MB against 4.46 MB non-solid. Zip compresses every
+entry independently and structurally cannot do this, which is also why it stays
+on the menu: it opens with no tool at all.
+
+Hand-rolled tar plus Node's built-in brotli was measured at 2.69 MB — the same
+size — but took 20.1 s against 7-Zip's 3.7 s, and produced a file with no common
+desktop archiver behind it. That implementation was removed once 7-Zip could be
+bundled rather than assumed.
+
+Paths go to 7-Zip in a list file, not on the command line: a selection can run
+past any platform's argument limit. The finished-archive dialog prints the
+command for unpacking whichever format was used.
+
+Temporary archives are swept on startup as well as on exit, so a crash or a hard
+kill cannot leave gigabytes behind. Only files carrying this program's own
+prefix and old enough that no live job could own them are touched.
+
+### Deleting
+
+The dialog can also remove what is selected. **Move to Trash** is the default
+and is recoverable; **Delete permanently** requires typing the exact file count,
+so a stale dialog cannot delete a selection nobody looked at. Both report
+progress, can be cancelled, and update the tree, the legend and the treemap as
+they go rather than after the fact.
+
+Trashing batches its calls. On macOS each `osascript` invocation costs around a
+hundred milliseconds, so one call per file would turn two thousand files into
+minutes of process startup alone — 85 files take 0.7 s batched.
+
+Archives build to a temporary file with per-file progress and a cancel button,
+then download as a normal file of known size. Unreadable or vanished files are
+skipped and reported rather than aborting the archive. ZIP64 is handled by
+`yazl`, so selections over 4 GB or 65,535 files are fine.
 
 ## Cleanup actions
 
