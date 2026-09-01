@@ -17,6 +17,7 @@
     },
     "include": [
         "src/shared/**/*.ts",
+        "src/server/**/*.ts",
         "src/client/**/*.ts",
         "src/test/**/*.ts"
     ]

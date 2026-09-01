@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createApp } from './server.js';
+import { encodePathParam, toDisplayPath } from './paths.js';
 import type { AddressInfo } from 'node:net';
 
 const pkg = JSON.parse(
@@ -77,7 +78,7 @@ const app = createApp({ oneFileSystem: !crossDevice });
 
 app.server.listen(port, '127.0.0.1', () => {
     const { port: actual } = app.server.address() as AddressInfo;
-    const url = `http://127.0.0.1:${actual}/?t=${app.token}`;
+    const url = `http://127.0.0.1:${actual}/?t=${app.token}&path=${encodePathParam(toDisplayPath(target))}`;
 
     app.beginScan(target, {
         oneFileSystem: !crossDevice,

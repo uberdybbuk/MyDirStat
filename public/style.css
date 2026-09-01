@@ -218,6 +218,11 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .twisty:hover { background: var(--border-strong); color: var(--text); }
 .twisty.leaf { visibility: hidden; }
 .swatch { flex: none; width: 9px; height: 9px; border-radius: 2px; }
+
+/* The tree pairs a thin colour chip with the file icon: the chip is the link
+   back to the tile's colour on the treemap, which an icon alone cannot carry. */
+.chip { flex: none; width: 3px; height: 14px; border-radius: 1px; }
+.ficon { flex: none; width: 15px; height: 15px; display: block; }
 .label { overflow: hidden; text-overflow: ellipsis; }
 .label.faded { color: var(--text-faint); font-style: italic; }
 

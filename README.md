@@ -1,7 +1,7 @@
 # mydirstat
 
 A cross-platform disk usage analyzer in the spirit of [WinDirStat](https://windirstat.net/).
-TypeScript throughout — Node CLI, browser UI, no runtime dependencies.
+TypeScript throughout — Node CLI, browser UI, no native dependencies.
 
 ```
 npm install
@@ -15,15 +15,29 @@ It scans the directory, starts a loopback HTTP server, and opens a browser on th
 familiar three-pane layout:
 
 - **Directory tree** — subtree sizes, share bars, item counts, modification dates,
-  sortable on any column, expanded lazily. Drag a column edge to resize it,
-  double-click the edge to reset it; widths persist per pane.
-- **Extension legend** — every file type with its colour, total size, share and
-  file count. Click a row to isolate that type on the map.
+  sortable on any column, expanded lazily, with Material file and folder icons.
+  Drag a column edge to resize it, double-click the edge to reset it; widths
+  persist per pane.
+- **Extension legend** — every file type with its icon, colour, total size,
+  share and file count. Click a row to isolate that type on the map.
 - **Treemap** — a squarified cushion treemap where area is proportional to size
   and colour is the file type. Hover for the path, click to select, double-click
   a folder to zoom, right-click for cleanup actions.
 
 Selection is linked across all three panes in both directions.
+
+The address bar carries the scanned folder, so a reload restores the same view
+and the URL is meaningful to look at:
+
+```
+http://127.0.0.1:56968/?path=/Users/tbaskan/repos/MyDirStat
+```
+
+Paths are always forward-slashed, on Windows too — a backslash would have to be
+percent-encoded, turning `C:\Users\me` into `C:%5CUsers%5Cme` in the address
+bar. The server converts to the native separator before it touches the
+filesystem. The per-run token is kept out of the URL and held in `sessionStorage`
+instead, so it survives a reload without ending up in history or a screenshot.
 
 ## Options
 
@@ -61,8 +75,10 @@ Two `tsconfig` projects compile `src/shared` + `src/server` to `dist/` under
 Node types, and `src/shared` + `src/client` to `public/js/` under DOM types.
 `protocol.ts` is compiled into both, so the API shapes are checked at the
 boundary instead of trusted, and the flag bits have one definition rather than
-a copy in the client that can drift out of step with the scanner. TypeScript is
-the only dependency, and it is a dev dependency: nothing ships at runtime.
+a copy in the client that can drift out of step with the scanner.
+
+There are two dependencies: TypeScript, which is dev-only, and
+`material-icon-theme`, which is data — SVGs and a mapping table, no code.
 
 ## How it works
 
@@ -104,6 +120,25 @@ border. The light vector is deliberately *not* normalised: leaving `lightZ` abov
 to its edges, which reads as a crease between neighbours and keeps the base
 colour identifiable.
 
+## Icons
+
+File and folder icons come from the [Material Icon
+Theme](https://github.com/material-extensions/vscode-material-icon-theme), the
+same set as the VS Code extension. Its mapping is richer than extension-to-icon:
+exact filenames resolve first, so `package.json` gets the Node icon rather than a
+generic JSON one, and 4,654 folder names give `src`, `node_modules` and `.git`
+their own icons. Multi-part extensions resolve longest-suffix-first, so
+`db.schema.json` is a JSON-schema icon and not plain JSON.
+
+Icons appear in the tree and the legend, never on the treemap: tiles there are
+routinely a handful of pixels, and colour is the whole encoding that ties the
+map to the legend. In the tree each row carries a thin colour chip beside its
+icon, so the link back to the tile's colour on the map survives.
+
+The server resolves an icon name per row and serves the SVG from
+`/icons/<name>.svg`, validated against the manifest's own definitions — an
+allowlist, so a request cannot traverse out of the icon directory.
+
 ## Cleanup actions
 
 Right-click any tile or tree row:
@@ -126,6 +161,15 @@ from the address bar), a `Host` header check so a rebound DNS name cannot reach
 it, and an `Origin` check on mutating requests. It binds `127.0.0.1` only, and
 every action target is verified to lie inside the scan root. Cleanup actions
 shell out through `execFile` with an argv array, never a shell string.
+
+## Credits
+
+Icons: [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme)
+by Material Extensions, MIT licensed. The full licence ships with the package in
+`node_modules/material-icon-theme/LICENSE`.
+
+Algorithms: squarified treemap layout from Bruls, Huizing & van Wijk (2000);
+cushion shading from van Wijk & van de Wetering (1999).
 
 ## Tests
 

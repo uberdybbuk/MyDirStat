@@ -25,6 +25,15 @@ export type SizeMetric = 'alloc' | 'size';
 export interface TreeRow {
     i: number;
     n: string;
+    /** Material Icon Theme icon name; fetch at /icons/<icon>.svg */
+    icon: string;
+    /**
+     * Extension rank this row is coloured by, already resolved server-side —
+     * for a directory that is the dominant type beneath it, not -1. Using this
+     * rather than `ext` is what keeps a tree row's colour chip identical to its
+     * tile on the treemap.
+     */
+    colorRank: number;
     size: number;
     alloc: number;
     files: number;
@@ -77,6 +86,7 @@ export interface ExtensionRow {
     ext: string;
     label: string;
     color: string;
+    icon: string;
     rank: number;
     size: number;
     alloc: number;

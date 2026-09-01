@@ -19,6 +19,8 @@ import { startScan, type ScanHandle, type ScanOptions } from './scanner.js';
 import { buildTreemap } from './treemap-query.js';
 import { colorForRank, extensionLabel, SPECIAL_COLORS } from './palette.js';
 import { NodeStore } from './store.js';
+import { iconForExtension, iconForFile, iconForFolder, iconFilePath } from './icons.js';
+import { toDisplayPath, toNativePath } from './paths.js';
 import { F_DIR } from '../shared/protocol.js';
 import type {
     ActionRequest, BrowseResponse, ExtensionRow, RootsResponse,
@@ -95,11 +97,11 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
         state.scanId += 1;
         state.progress = { files: 0, dirs: 0, bytes: 0, errors: 0, path: root };
 
-        broadcast('start', { root, scanId: state.scanId });
+        broadcast('start', { root: toDisplayPath(root), scanId: state.scanId });
 
         const handle = startScan(root, { oneFileSystem, ...opts }, (progress) => {
             state.progress = progress;
-            broadcast('progress', progress);
+            broadcast('progress', { ...progress, path: toDisplayPath(progress.path) });
         });
         active = handle;
 
@@ -126,12 +128,17 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
     function summary(): ScanSummary {
         const store = state.store;
         if (!store) {
-            return { status: state.status, root: state.root, error: state.error, progress: state.progress };
+            return {
+                status: state.status,
+                root: state.root === null ? null : toDisplayPath(state.root),
+                error: state.error,
+                progress: { ...state.progress, path: toDisplayPath(state.progress.path) },
+            };
         }
         return {
             status: state.status,
             scanId: state.scanId,
-            root: store.root,
+            root: toDisplayPath(store.root),
             nodes: store.count,
             files: store.files[0],
             dirs: store.dirs[0],
@@ -144,14 +151,23 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
 
     // ------------------------------------------------------------ tree helpers
 
+    /** Native filesystem path; only fs calls should see this form. */
     function pathOf(store: NodeStore, id: number): string {
         return id === 0 ? store.root : join(store.root, ...store.segments(id));
     }
 
+    /** The same path as the client and the URL bar see it. */
+    function displayPathOf(store: NodeStore, id: number): string {
+        return toDisplayPath(pathOf(store, id));
+    }
+
     function row(store: NodeStore, i: number): TreeRow {
+        const isDir = (store.flags[i] & F_DIR) !== 0;
         return {
             i,
             n: store.name(i),
+            icon: isDir ? iconForFolder(store.name(i)) : iconForFile(store.name(i)),
+            colorRank: store.colorExt(i),
             size: store.size[i],
             alloc: store.alloc[i],
             files: store.files[i],
@@ -268,6 +284,23 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
         }
     }
 
+    async function serveIcon(res: ServerResponse, pathname: string): Promise<void> {
+        const name = decodeURIComponent(pathname.slice('/icons/'.length)).replace(/\.svg$/, '');
+        const file = iconFilePath(name);
+        if (!file) return send(res, 404, { error: 'Unknown icon' });
+        try {
+            const body = await fs.readFile(file);
+            res.writeHead(200, {
+                'content-type': 'image/svg+xml',
+                'content-length': String(body.length),
+                'cache-control': 'public, max-age=86400',
+            });
+            res.end(body);
+        } catch {
+            send(res, 404, { error: 'Unknown icon' });
+        }
+    }
+
     const server = createServer((req, res) => {
         void handle(req, res).catch((err: Error) => send(res, 500, { error: err.message }));
     });
@@ -277,6 +310,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
         const pathname = url.pathname;
 
         if (!hostOk(req)) return send(res, 421, { error: 'Misdirected request' });
+        if (pathname.startsWith('/icons/')) return serveIcon(res, pathname);
         if (!pathname.startsWith('/api/')) return serveStatic(req, res, pathname);
 
         const provided = url.searchParams.get('t') ?? req.headers['x-mydirstat-token'];
@@ -326,12 +360,17 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
             }
 
             case '/api/browse': {
-                const dir = url.searchParams.get('path') ?? homedir();
+                const dir = toNativePath(url.searchParams.get('path') ?? homedir());
                 const entries = readdirSync(dir, { withFileTypes: true })
                     .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-                    .map((e) => ({ name: e.name, path: join(dir, e.name) }))
+                    .map((e) => ({ name: e.name, path: toDisplayPath(join(dir, e.name)) }))
                     .sort((a, b) => a.name.localeCompare(b.name));
-                const body: BrowseResponse = { path: resolve(dir), parent: parentOf(dir), entries };
+                const parent = parentOf(dir);
+                const body: BrowseResponse = {
+                    path: toDisplayPath(resolve(dir)),
+                    parent: parent === null ? null : toDisplayPath(parent),
+                    entries,
+                };
                 return send(res, 200, body, {}, accept);
             }
 
@@ -339,8 +378,9 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 if (req.method !== 'POST') return send(res, 405, { error: 'Use POST' });
                 const body = await readJson<{ path?: string; oneFileSystem?: boolean; countHardlinksOnce?: boolean }>(req);
                 if (!body.path) return send(res, 400, { error: 'path is required' });
-                if (!existsSync(body.path)) return send(res, 400, { error: `No such directory: ${body.path}` });
-                beginScan(body.path, {
+                const wanted = toNativePath(body.path);
+                if (!existsSync(wanted)) return send(res, 400, { error: `No such directory: ${body.path}` });
+                beginScan(wanted, {
                     oneFileSystem: body.oneFileSystem !== false,
                     countHardlinksOnce: body.countHardlinksOnce !== false,
                 });
@@ -359,7 +399,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 if (id === null) return send(res, 400, { error: 'Bad node id' });
                 const rows: TreeRow[] = [];
                 for (const c of store.children(id)) rows.push(row(store, c));
-                return send(res, 200, { id, path: pathOf(store, id), self: row(store, id), rows }, {}, accept);
+                return send(res, 200, { id, path: displayPathOf(store, id), self: row(store, id), rows }, {}, accept);
             }
 
             case '/api/ancestors': {
@@ -370,7 +410,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 for (let n = id; n !== -1; n = store.parent[n]) chain.push(n);
                 chain.reverse();
                 return send(res, 200, {
-                    chain: chain.map((i) => ({ i, n: i === 0 ? store.root : store.name(i) })),
+                    chain: chain.map((i) => ({ i, n: i === 0 ? toDisplayPath(store.root) : store.name(i) })),
                 });
             }
 
@@ -396,6 +436,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                         ext,
                         label: extensionLabel(ext),
                         color: colorForRank(rank),
+                        icon: iconForExtension(ext),
                         rank,
                         size: store.extSize[rank],
                         alloc: store.extAlloc[rank],
@@ -410,7 +451,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 const id = nodeId();
                 if (!store) return send(res, 409, { error: 'No completed scan' });
                 if (id === null) return send(res, 400, { error: 'Bad node id' });
-                return send(res, 200, { ...row(store, id), path: pathOf(store, id) });
+                return send(res, 200, { ...row(store, id), path: displayPathOf(store, id) });
             }
 
             case '/api/action': {
@@ -441,7 +482,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                     default:
                         return send(res, 400, { error: `Unknown action: ${String(op)}` });
                 }
-                return send(res, 200, { ok: true, path: target, summary: summary() });
+                return send(res, 200, { ok: true, path: toDisplayPath(target), summary: summary() });
             }
 
             default:
@@ -461,13 +502,14 @@ function parentOf(dir: string): string | null {
 function listRoots(): { label: string; path: string }[] {
     const roots: { label: string; path: string }[] = [];
     const push = (label: string, path: string): void => {
-        if (existsSync(path) && !roots.some((r) => r.path === path)) roots.push({ label, path });
+        const shown = toDisplayPath(path);
+        if (existsSync(path) && !roots.some((r) => r.path === shown)) roots.push({ label, path: shown });
     };
 
     if (process.platform === 'win32') {
         for (let c = 'A'.charCodeAt(0); c <= 'Z'.charCodeAt(0); c++) {
             const drive = `${String.fromCharCode(c)}:${sep}`;
-            if (existsSync(drive)) roots.push({ label: drive, path: drive });
+            if (existsSync(drive)) roots.push({ label: drive, path: toDisplayPath(drive) });
         }
     } else {
         push('/', '/');

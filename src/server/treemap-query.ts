@@ -100,7 +100,7 @@ export function buildTreemap(
 
     // Directories fall back to the dominant extension beneath them, so a tile
     // that cannot be subdivided still carries type information.
-    const extOf = (i: number): number => (store.ext[i] >= 0 ? store.ext[i] : store.domExt[i]);
+    const extOf = (i: number): number => store.colorExt(i);
     const node = (i: number): TreemapNode => ({
         i,
         v: value[i],

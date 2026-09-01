@@ -11,8 +11,46 @@ import type {
     SizeMetric, TreemapResponse,
 } from '../shared/protocol.js';
 
-const TOKEN = new URLSearchParams(location.search).get('t') ?? '';
-history.replaceState(null, '', location.pathname);
+import { encodePathParam } from '../shared/paths.js';
+
+const TOKEN_KEY = 'mydirstat.token';
+
+/** Rewrite the address bar to describe what is on screen, minus the token. */
+export function setUrlPath(path: string | null): void {
+    const query = path ? `?path=${encodePathParam(path)}` : '';
+    history.replaceState(null, '', location.pathname + query);
+}
+
+export function requestedPath(): string | null {
+    return new URLSearchParams(location.search).get('path');
+}
+
+/**
+ * The token must survive a reload, but keeping it in the address bar would put
+ * it in history, bookmarks and any screenshot. sessionStorage is the middle
+ * ground: it outlives a reload of this tab and dies with it. The URL keeps only
+ * the scanned path, which is what makes the address bar meaningful.
+ */
+function recoverToken(): string {
+    const params = new URLSearchParams(location.search);
+    const fromUrl = params.get('t');
+    if (fromUrl) {
+        try {
+            sessionStorage.setItem(TOKEN_KEY, fromUrl);
+        } catch {
+            /* blocked storage: this session still works, a reload will not */
+        }
+        setUrlPath(params.get('path'));
+        return fromUrl;
+    }
+    try {
+        return sessionStorage.getItem(TOKEN_KEY) ?? '';
+    } catch {
+        return '';
+    }
+}
+
+const TOKEN = recoverToken();
 
 export const token = TOKEN;
 
@@ -26,6 +64,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         },
     });
     const body = (await res.json().catch(() => ({}))) as T & { error?: string };
+    if (res.status === 403) {
+        throw new Error('This page is no longer authorised — reopen the URL that mydirstat printed.');
+    }
     if (!res.ok) throw new Error(body.error ?? `${res.status} ${res.statusText}`);
     return body;
 }

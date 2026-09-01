@@ -173,6 +173,16 @@ export class NodeStore {
         return decoder.decode(this.nameBuf.subarray(this.nameOff[i], this.nameOff[i + 1]));
     }
 
+    /**
+     * The extension rank a node is coloured by: its own, or — for a directory,
+     * which has none — the dominant type beneath it. The treemap and the tree
+     * pane must agree on this, so it lives here rather than being derived
+     * separately in each.
+     */
+    colorExt(i: number): number {
+        return this.ext[i] >= 0 ? this.ext[i] : this.domExt[i];
+    }
+
     isDir(i: number): boolean {
         return (this.flags[i] & F_DIR) !== 0;
     }

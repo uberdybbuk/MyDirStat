@@ -37,5 +37,8 @@
         "windirstat",
         "du",
         "analyzer"
-    ]
+    ],
+    "dependencies": {
+        "material-icon-theme": "^5.38.1"
+    }
 }

@@ -1,7 +1,7 @@
 /** Three-pane UI: directory tree, extension legend, treemap; all cross-linked. */
 
 import { Treemap, type Rgb, type Tile } from './treemap.js';
-import { api } from './api.js';
+import { api, requestedPath, setUrlPath } from './api.js';
 import { el, all, escapeHtml, hexToRgb } from './dom.js';
 import { bytes, count, percent, when } from './format.js';
 import { installColumnResizers, TREE_COLUMNS, EXT_COLUMNS } from './columns.js';
@@ -81,9 +81,17 @@ function refreshColors(): void {
     state.rgbByRank = new Map([...state.colorByRank].map(([rank, hex]) => [rank, hexToRgb(hex)] as const));
 }
 
-// Every tile is coloured by the extension it represents. Directories and folded
-// aggregates report the type that dominates their bytes, so a region too fine
-// to subdivide still reads as "mostly video" rather than as grey.
+/**
+ * The one place a palette colour is decided, for both the treemap and the
+ * tree's colour chips. Directories and folded aggregates report the type that
+ * dominates their bytes, so a region too fine to subdivide still reads as
+ * "mostly video" rather than as grey — and a folder's chip matches its tile.
+ */
+function paletteColor(rank: number, flags: number, aggregate = false): string {
+    if (flags & (F_ERROR | F_SKIPPED)) return state.special.unreadable;
+    return state.colorByRank.get(rank) ?? (flags & F_DIR || aggregate ? state.special.dir : state.special.other);
+}
+
 map.colorOf = (node: TreemapNode): Rgb => {
     if (node.f & (F_ERROR | F_SKIPPED)) return state.specialRgb.unreadable;
     const byExt = state.rgbByRank.get(node.e);
@@ -170,7 +178,7 @@ function renderTreeWindow(): void {
         const share = value / rootValue;
         const isDir = (row.flags & F_DIR) !== 0;
         const open = state.expanded.has(id);
-        const color = isDir ? state.special.dir : state.colorByRank.get(row.ext) ?? state.special.other;
+        const color = paletteColor(row.colorRank, row.flags);
 
         const faded = row.flags & (F_SKIPPED | F_ERROR) ? ' faded' : '';
         const suffix =
@@ -184,7 +192,8 @@ function renderTreeWindow(): void {
             `<div class="trow tree-grid${id === state.selected ? ' sel' : ''}" data-id="${id}">` +
                 `<div class="name" style="padding-left:${4 + depth * 13}px">` +
                     `<button class="twisty${isDir && row.kids ? '' : ' leaf'}" data-twisty="${id}" tabindex="-1">${open ? '▼' : '▶'}</button>` +
-                    `<span class="swatch" style="background:${color}"></span>` +
+                    `<span class="chip" style="background:${color}"></span>` +
+                    `<img class="ficon" src="/icons/${encodeURIComponent(row.icon)}.svg" alt="" loading="lazy" decoding="async">` +
                     `<span class="label${faded}" title="${escapeHtml(row.n)}">${escapeHtml(row.n)}${suffix}</span>` +
                 `</div>` +
                 `<div class="num">${bytes(value)}</div>` +
@@ -263,6 +272,7 @@ function renderExtensions(): void {
             return (
                 `<div class="erow ext-grid${state.highlight === r.rank ? ' sel' : ''}" data-rank="${r.rank}">` +
                     `<div class="name"><span class="swatch" style="background:${r.color}"></span>` +
+                    `<img class="ficon" src="/icons/${encodeURIComponent(r.icon)}.svg" alt="" loading="lazy" decoding="async">` +
                     `<span class="label">${escapeHtml(r.label)}</span></div>` +
                     `<div class="num">${bytes(value)}</div>` +
                     `<div class="pct" style="--f:${share.toFixed(4)}"><i></i><span>${percent(share)}</span></div>` +
@@ -357,6 +367,7 @@ async function afterScan(summary: ScanSummary): Promise<void> {
     await renderCrumbs();
     await loadTreemap();
     el<HTMLInputElement>('path').value = root.path;
+    setUrlPath(root.path);
 }
 
 function connect(): void {
@@ -364,11 +375,21 @@ function connect(): void {
     events.addEventListener('state', (e) => {
         const summary = JSON.parse((e as MessageEvent<string>).data) as ScanSummary;
         setStatus(summary);
+
+        const wanted = requestedPath();
+        if (wanted && wanted !== summary.root) {
+            // A different folder than the server holds: scan it.
+            el<HTMLInputElement>('path').value = wanted;
+            void api.scan(wanted).catch(reportError);
+            return;
+        }
         if (summary.status === 'ready') void afterScan(summary);
+        else if (summary.root) el<HTMLInputElement>('path').value = summary.root;
     });
     events.addEventListener('start', (e) => {
         const { root } = JSON.parse((e as MessageEvent<string>).data) as { root: string };
         el<HTMLInputElement>('path').value = root;
+        setUrlPath(root);
         setStatus({ status: 'scanning', root });
         const empty = el('mapEmpty');
         empty.hidden = false;
