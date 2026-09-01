@@ -274,14 +274,32 @@ function renderExtensions(): void {
 
 /* ---------------------------------------------------------- breadcrumbs --- */
 
+/** The final segment of a path, e.g. "/a/b/MyDirStat" -> "MyDirStat". */
+function leafName(path: string): string {
+    return path.split('/').filter(Boolean).pop() ?? path;
+}
+
+/**
+ * The breadcrumb exists to zoom back out, not to label the scan. At the top
+ * level there is nothing to navigate back to and the path is already in the
+ * toolbar, the tree root and the address bar, so the bar hides itself. When it
+ * does appear it shows segments relative to the scan root rather than repeating
+ * the absolute path.
+ */
 async function renderCrumbs(): Promise<void> {
-    if (state.status !== 'ready') {
-        el('crumbs').innerHTML = '';
+    const crumbs = el('crumbs');
+    if (state.status !== 'ready' || state.zoom === 0) {
+        crumbs.innerHTML = '';
+        crumbs.hidden = true;
         return;
     }
     const { chain } = await api.ancestors(state.zoom);
-    el('crumbs').innerHTML = chain
-        .map((link, i) => (i ? '<span class="sep">›</span>' : '') + `<button data-zoom="${link.i}">${escapeHtml(link.n)}</button>`)
+    crumbs.hidden = false;
+    crumbs.innerHTML = chain
+        .map((link, i) => {
+            const label = i === 0 ? leafName(link.n) : link.n;
+            return (i ? '<span class="sep">›</span>' : '') + `<button data-zoom="${link.i}">${escapeHtml(label)}</button>`;
+        })
         .join('');
 }
 
@@ -491,6 +509,19 @@ function placeTip(tip: HTMLElement, clientX: number, clientY: number): void {
     tip.style.top = `${Math.max(4, y)}px`;
 }
 
+/**
+ * Treemap tooltips drop the scan root: it is already on screen in the toolbar
+ * and the tree, and repeating it pushes the part that identifies the file off
+ * the end of the tooltip.
+ */
+function relativeToRoot(path: string): string {
+    const root = state.summary?.root;
+    if (!root) return path;
+    if (path === root) return leafName(root);
+    const prefix = root.endsWith('/') ? root : `${root}/`;
+    return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
 function tipHtml(node: TreemapNode, label: string): string {
     const kind = node.g ? '' : node.f & F_DIR ? '  ·  folder' : '';
     return `<div class="tip-name">${escapeHtml(label)}</div><div class="tip-meta">${bytes(node.v)}${kind}</div>`;
@@ -508,9 +539,12 @@ canvas.addEventListener('mousemove', (e) => {
     }
 
     const node = tile.node;
+    const cached = pathCache.get(node.i);
     const known = node.g
         ? `${node.g.toLocaleString()} smaller items`
-        : pathCache.get(node.i) ?? state.rows.get(node.i)?.n;
+        : cached !== undefined
+            ? relativeToRoot(cached)
+            : state.rows.get(node.i)?.n;
 
     tip.innerHTML = tipHtml(node, known ?? '…');
     tip.hidden = false;
@@ -520,7 +554,7 @@ canvas.addEventListener('mousemove', (e) => {
         void pathOf(node.i).then((path) => {
             // Only patch in the name if the pointer is still on the same tile.
             if (map.hovered !== tile || tip.hidden) return;
-            tip.innerHTML = tipHtml(node, path);
+            tip.innerHTML = tipHtml(node, relativeToRoot(path));
             placeTip(tip, e.clientX, e.clientY);
         }).catch(() => undefined);
     }

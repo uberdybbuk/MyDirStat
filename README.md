@@ -21,8 +21,10 @@ familiar three-pane layout:
 - **Extension legend** — every file type with its icon, colour, total size,
   share and file count. Click a row to isolate that type on the map.
 - **Treemap** — a squarified cushion treemap where area is proportional to size
-  and colour is the file type. Hover for the path, click to select, double-click
-  a folder to zoom, right-click for cleanup actions.
+  and colour is the file type. Hover for the path relative to the scan root,
+  click to select, double-click a folder to zoom, right-click for cleanup
+  actions. Zooming in reveals a breadcrumb bar for zooming back out; at the top
+  level it hides itself, since the root path is already on screen.
 
 Selection is linked across all three panes in both directions.
 
