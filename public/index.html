@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mydirstat</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='9' height='9' x='0' y='0' fill='%234a86d8'/><rect width='7' height='5' x='9' y='0' fill='%23e0603c'/><rect width='7' height='4' x='9' y='5' fill='%234fb783'/><rect width='16' height='7' x='0' y='9' fill='%23e0a72e'/></svg>">
+</head>
+<body>
+<div id="app">
+
+    <header class="toolbar">
+        <button id="up" class="icon" title="Scan parent directory">&#x2191;</button>
+        <input id="path" class="path" spellcheck="false" autocomplete="off" placeholder="Directory to scan">
+        <select id="roots" class="roots" title="Volumes"></select>
+        <button id="scan" class="primary">Scan</button>
+        <button id="cancel" hidden>Cancel</button>
+
+        <span class="spacer"></span>
+
+        <div class="seg" role="group" aria-label="Size metric">
+            <button data-metric="alloc" class="on" title="Space actually occupied on disk">On disk</button>
+            <button data-metric="size" title="Sum of file lengths">Apparent</button>
+        </div>
+        <div id="summary" class="summary"></div>
+    </header>
+
+    <div id="progress" class="progress" hidden>
+        <div class="bar"><i></i></div>
+        <div class="progress-text"><span id="progressCount"></span><span id="progressPath"></span></div>
+    </div>
+
+    <nav id="crumbs" class="crumbs" aria-label="Zoom path"></nav>
+
+    <main>
+        <section class="row top" id="topRow">
+            <section class="pane" id="treePane">
+                <div class="pane-head tree-grid">
+                    <button data-sort="name" class="col-name">Name</button>
+                    <button data-sort="size" class="col-num on">Size</button>
+                    <button data-sort="pct" class="col-pct">Share</button>
+                    <button data-sort="items" class="col-num">Items</button>
+                    <button data-sort="mtime" class="col-date">Modified</button>
+                </div>
+                <div class="scroll" id="treeScroll" tabindex="0">
+                    <div class="sizer" id="treeSizer"><div class="rows" id="treeRows"></div></div>
+                </div>
+            </section>
+
+            <div class="splitter vertical" id="splitV" role="separator" aria-orientation="vertical"></div>
+
+            <section class="pane" id="extPane">
+                <div class="pane-head ext-grid">
+                    <span>Type</span><span class="col-num">Size</span><span class="col-pct">Share</span><span class="col-num">Files</span>
+                </div>
+                <div class="scroll" id="extScroll">
+                    <div id="extRows"></div>
+                </div>
+            </section>
+        </section>
+
+        <div class="splitter horizontal" id="splitH" role="separator" aria-orientation="horizontal"></div>
+
+        <section class="map" id="mapPane">
+            <canvas id="map"></canvas>
+            <div class="map-empty" id="mapEmpty">Scanning&hellip;</div>
+        </section>
+    </main>
+
+    <footer class="status" id="status">
+        <span id="statusPath" class="status-path"></span>
+        <span id="statusMeta" class="status-meta"></span>
+    </footer>
+</div>
+
+<div id="tip" class="tip" hidden></div>
+
+<div id="menu" class="menu" hidden role="menu">
+    <button data-op="zoom">Zoom in here</button>
+    <button data-op="reveal">Show in file manager</button>
+    <button data-op="open">Open</button>
+    <hr>
+    <button data-op="trash" class="danger">Move to Trash</button>
+    <button data-op="delete" class="danger">Delete permanently&hellip;</button>
+</div>
+
+<div id="modal" class="modal" hidden>
+    <div class="sheet">
+        <h2 id="modalTitle">Delete permanently</h2>
+        <p id="modalBody"></p>
+        <div class="sheet-actions">
+            <button id="modalCancel">Cancel</button>
+            <button id="modalConfirm" class="danger">Delete</button>
+        </div>
+    </div>
+</div>
+
+<script type="module" src="/js/client/app.js"></script>
+</body>
+</html>

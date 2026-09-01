@@ -1,0 +1,23 @@
+{
+    "extends": "./tsconfig.base.json",
+    "compilerOptions": {
+        "lib": [
+            "ES2022",
+            "DOM",
+            "DOM.Iterable"
+        ],
+        "types": [
+            "node"
+        ],
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "rootDir": "src",
+        "outDir": "dist-test",
+        "tsBuildInfoFile": "dist-test/.tsbuildinfo"
+    },
+    "include": [
+        "src/shared/**/*.ts",
+        "src/client/**/*.ts",
+        "src/test/**/*.ts"
+    ]
+}

@@ -1,0 +1,41 @@
+{
+    "name": "mydirstat",
+    "version": "0.1.0",
+    "description": "Cross-platform disk usage analyzer in the spirit of WinDirStat",
+    "type": "module",
+    "license": "MIT",
+    "engines": {
+        "node": ">=18.17"
+    },
+    "bin": {
+        "mydirstat": "bin/mydirstat.js"
+    },
+    "files": [
+        "bin",
+        "dist",
+        "public",
+        "README.md"
+    ],
+    "scripts": {
+        "build": "tsc -b tsconfig.server.json tsconfig.client.json",
+        "watch": "tsc -b -w tsconfig.server.json tsconfig.client.json",
+        "typecheck": "tsc -b tsconfig.server.json tsconfig.client.json tsconfig.test.json",
+        "prestart": "npm run build",
+        "start": "node bin/mydirstat.js",
+        "pretest": "tsc -b tsconfig.test.json",
+        "test": "node --test dist-test/test/*.test.js",
+        "clean": "rm -rf dist dist-test public/js *.tsbuildinfo"
+    },
+    "devDependencies": {
+        "@types/node": "^26.4.0",
+        "typescript": "^5.6.0"
+    },
+    "keywords": [
+        "disk",
+        "usage",
+        "treemap",
+        "windirstat",
+        "du",
+        "analyzer"
+    ]
+}
