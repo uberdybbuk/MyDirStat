@@ -15,7 +15,7 @@
     --row-hover: #22262e;
     --row-select: #29405e;
     --danger: #e0603c;
-    --bar: #3b4a5f;
+    --bar: rgba(96, 156, 232, 0.22);
     --shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
     --row-h: 22px;
 }
@@ -33,7 +33,7 @@
         --text-faint: #8b94a1;
         --row-hover: #eef1f5;
         --row-select: #d3e2f7;
-        --bar: #c3cedd;
+        --bar: rgba(74, 134, 216, 0.16);
         --shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
     }
 }
@@ -269,15 +269,34 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .label { overflow: hidden; text-overflow: ellipsis; }
 .label.faded { color: var(--text-faint); font-style: italic; }
 
-/* Share column: a bar behind a right-aligned number. */
+/*
+ * Share column: the cell fills from the left in proportion to the share, with
+ * the number sitting on top.
+ *
+ * This used to be a thin centred bar drawn behind the text, which at high
+ * percentages ran straight through the digits and read as a strikethrough. A
+ * full-height translucent fill cannot do that, and it also lets the row's own
+ * hover and selection colours show through instead of being covered.
+ */
 .pct { position: relative; }
 .pct i {
-    position: absolute; left: 8px; top: 6px; bottom: 6px;
-    background: var(--bar); border-radius: 2px;
-    /* --f is the 0..1 share, set inline per row; 16px is the cell padding. */
-    width: calc((100% - 16px) * var(--f, 0));
+    position: absolute;
+    left: 0;
+    top: 1px;
+    bottom: 1px;
+    /* --f is the 0..1 share, set inline per row. */
+    width: calc(100% * var(--f, 0));
+    background: var(--bar);
+    border-radius: 0 2px 2px 0;
 }
-.pct span { position: relative; display: block; text-align: right; font-family: ui-monospace, Menlo, monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
+.pct span {
+    position: relative;
+    display: block;
+    text-align: right;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
 
 /* ------------------------------------------------------------- treemap --- */
 
