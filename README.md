@@ -12,8 +12,16 @@ node bin/mydirstat.js ~/Projects
 `npm run watch` rebuilds on change; `npm test` runs the layout suite.
 
 It scans the directory, starts a loopback HTTP server, and opens a browser on the
-familiar three-pane layout. A long scan can be interrupted with **Stop**, which
-keeps whatever was found so far and leaves the tree fully usable.
+familiar three-pane layout. A long scan reports running totals and a ticking elapsed time. Progress arrives
+from the scanner a few times a second, but the clock is driven separately so the
+line never looks frozen between reports. It can be interrupted with **Stop**,
+which keeps whatever was found so far and leaves the tree fully usable.
+
+The volume picker only appears where it earns its place: on Windows, where a
+drive letter cannot be guessed, or on a machine with more than one real device.
+Volumes are deduplicated by device id rather than by path, because macOS shows
+the startup disk at both `/` and `/Volumes/<name>` through a firmlink — matching
+on paths alone offers the same disk twice under two names.
 
 - **Directory tree** — subtree sizes, share bars, item counts, modification dates,
   sortable on any column, expanded lazily, with Material file and folder icons.

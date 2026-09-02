@@ -177,7 +177,10 @@ function renderTreeWindow(): void {
     const html: string[] = [];
     for (let k = 0; k < shown; k++) {
         const { id, depth } = state.visible[first + k];
-        const row = state.rows.get(id)!;
+        const row = state.rows.get(id);
+        // Rendering must never throw: rows can be dropped underneath a pending
+        // repaint, and a missing one is simply not drawn.
+        if (!row) continue;
         const value = valueOf(row);
         const share = value / rootValue;
         const isDir = (row.flags & F_DIR) !== 0;
@@ -359,6 +362,40 @@ async function showStatus(id: number): Promise<void> {
 
 /* ------------------------------------------------------------- scanning --- */
 
+/**
+ * A scan reports progress a few times a second, but the elapsed time has to
+ * move between those reports or the whole line looks frozen. A ticker owns the
+ * summary while a scan runs and hands it back when one finishes.
+ */
+let ticker: ReturnType<typeof setInterval> | null = null;
+let scanStartedAt = 0;
+let latestProgress: ScanProgress | null = null;
+
+function renderProgress(): void {
+    const seconds = ((Date.now() - scanStartedAt) / 1000).toFixed(1);
+    const p = latestProgress;
+    el('summary').innerHTML = p
+        ? `<b>${bytes(p.bytes)}</b> in <b>${count(p.files)}</b> files, ` +
+          `<b>${count(p.dirs)}</b> folders <span class="dim">(${seconds}s)</span>`
+        : `<span class="dim">Scanning… (${seconds}s)</span>`;
+}
+
+function startTicker(startedAt: number): void {
+    stopTicker();
+    scanStartedAt = startedAt || Date.now();
+    latestProgress = null;
+    renderProgress();
+    // Tenths need a faster tick than they are shown at, or the display drifts
+    // visibly behind the clock.
+    ticker = setInterval(renderProgress, 60);
+}
+
+function stopTicker(): void {
+    if (!ticker) return;
+    clearInterval(ticker);
+    ticker = null;
+}
+
 function setStatus(summary: ScanSummary): void {
     state.summary = summary;
     state.status = summary.status;
@@ -366,6 +403,12 @@ function setStatus(summary: ScanSummary): void {
     el('progress').hidden = !scanning;
     el('cancel').hidden = !scanning;
     el<HTMLButtonElement>('scan').disabled = scanning;
+
+    if (scanning) {
+        if (!ticker) startTicker(summary.startedAt ?? Date.now());
+    } else {
+        stopTicker();
+    }
 
     if (summary.status === 'ready') {
         const total = summary.size ?? 0;
@@ -383,6 +426,10 @@ async function afterScan(summary: ScanSummary): Promise<void> {
     state.rows.clear();
     state.kids.clear();
     state.expanded.clear();
+    // The visible list indexes into rows, so it has to go at the same moment.
+    // A repaint landing between the two — a ResizeObserver during the await
+    // below, say — would otherwise look up ids that no longer exist.
+    state.visible = [];
     state.selected = null;
     state.highlight = null;
     map.setHighlight(null);
@@ -420,18 +467,20 @@ function connect(): void {
         else if (summary.root) el<HTMLInputElement>('path').value = summary.root;
     });
     events.addEventListener('start', (e) => {
-        const { root } = JSON.parse((e as MessageEvent<string>).data) as { root: string };
+        const { root, startedAt } = JSON.parse((e as MessageEvent<string>).data) as
+            { root: string; startedAt: number };
         el<HTMLInputElement>('path').value = root;
         setUrlPath(root);
-        setStatus({ status: 'scanning', root });
+        startTicker(startedAt);
+        setStatus({ status: 'scanning', root, startedAt });
         const empty = el('mapEmpty');
         empty.hidden = false;
         empty.textContent = 'Scanning…';
     });
     events.addEventListener('progress', (e) => {
-        const p = JSON.parse((e as MessageEvent<string>).data) as ScanProgress;
-        el('progressCount').textContent = `${count(p.files)} files  ${bytes(p.bytes)}`;
-        el('progressPath').textContent = p.path;
+        latestProgress = JSON.parse((e as MessageEvent<string>).data) as ScanProgress;
+        el('progressPath').textContent = latestProgress.path;
+        renderProgress();
     });
     events.addEventListener('done', (e) => {
         void afterScan(JSON.parse((e as MessageEvent<string>).data) as ScanSummary);
@@ -930,17 +979,24 @@ new ResizeObserver(() => {
 
 /* ----------------------------------------------------------------- boot --- */
 
-void api.roots().then(({ roots, home }) => {
+void api.roots().then(({ roots, showPicker, home }) => {
     const select = el<HTMLSelectElement>('roots');
-    select.innerHTML =
-        '<option value="">Volumes…</option>' +
-        roots.map((r) => `<option value="${escapeHtml(r.path)}">${escapeHtml(r.label)}</option>`).join('');
-    select.onchange = () => {
-        if (!select.value) return;
-        el<HTMLInputElement>('path').value = select.value;
-        select.value = '';
-        el('scan').click();
-    };
+
+    // On a single-disk machine the picker would only offer "/" and "~", which
+    // the path box already accepts, so it stays out of the toolbar entirely.
+    select.hidden = !showPicker;
+    if (showPicker) {
+        select.innerHTML =
+            '<option value="">Volumes…</option>' +
+            roots.map((r) => `<option value="${escapeHtml(r.path)}">${escapeHtml(r.label)}</option>`).join('');
+        select.onchange = () => {
+            if (!select.value) return;
+            el<HTMLInputElement>('path').value = select.value;
+            select.value = '';
+            el('scan').click();
+        };
+    }
+
     const pathInput = el<HTMLInputElement>('path');
     if (!pathInput.value) pathInput.value = home;
 });

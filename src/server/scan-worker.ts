@@ -162,7 +162,10 @@ if (!rootStat) {
                 store.mtime[idx] = st.mtimeMs;
                 store.ext[idx] = internExt(name);
                 nFiles++;
-                nBytes += alloc;
+                // Apparent size, matching what the UI reports everywhere else —
+                // reporting allocation here would make the total jump when the
+                // scan finishes and the final figure takes over.
+                nBytes += size;
             }
             maybeReport(full);
         }

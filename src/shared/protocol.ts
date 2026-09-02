@@ -115,6 +115,8 @@ export interface ScanProgress {
 export interface ScanSummary {
     status: ScanStatus;
     scanId?: number;
+    /** When the scan began, so a page opened mid-scan shows the true elapsed time. */
+    startedAt?: number;
     root: string | null;
     nodes?: number;
     files?: number;
@@ -128,7 +130,14 @@ export interface ScanSummary {
 }
 
 export interface RootsResponse {
+    /** One entry per distinct device; empty of duplicates like macOS firmlinks. */
     roots: { label: string; path: string }[];
+    /**
+     * Whether the volume picker is worth showing at all. False on a machine
+     * with a single disk, where it would only repeat what the path box already
+     * accepts.
+     */
+    showPicker: boolean;
     home: string;
     cwd: string;
 }

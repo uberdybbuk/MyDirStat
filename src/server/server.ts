@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { promises as fs, existsSync, readdirSync } from 'node:fs';
+import { promises as fs, existsSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -108,7 +108,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
         state.scanId += 1;
         state.progress = { files: 0, dirs: 0, bytes: 0, errors: 0, path: root };
 
-        broadcast('start', { root: toDisplayPath(root), scanId: state.scanId });
+        broadcast('start', { root: toDisplayPath(root), scanId: state.scanId, startedAt: state.startedAt });
 
         const handle = startScan(root, { oneFileSystem, ...opts }, (progress) => {
             state.progress = progress;
@@ -143,6 +143,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
         if (!store) {
             return {
                 status: state.status,
+                startedAt: state.startedAt,
                 root: state.root === null ? null : toDisplayPath(state.root),
                 error: state.error,
                 progress: { ...state.progress, path: toDisplayPath(state.progress.path) },
@@ -151,6 +152,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
         return {
             status: state.status,
             scanId: state.scanId,
+            startedAt: state.startedAt,
             root: toDisplayPath(store.root),
             nodes: store.count,
             files: store.files[0],
@@ -368,7 +370,20 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
             }
 
             case '/api/roots': {
-                const body: RootsResponse = { roots: listRoots(), home: homedir(), cwd: process.cwd() };
+                const volumes = listRoots();
+                // The picker only earns its place where a volume is not
+                // guessable: a Windows drive letter, or a second real device.
+                // On a single-disk Mac it would just offer "/" and "~", which
+                // are two keystrokes to type.
+                const showPicker = process.platform === 'win32' || volumes.length > 1;
+                if (showPicker) volumes.push({ label: 'Home', path: toDisplayPath(homedir()) });
+
+                const body: RootsResponse = {
+                    roots: volumes,
+                    showPicker,
+                    home: toDisplayPath(homedir()),
+                    cwd: toDisplayPath(process.cwd()),
+                };
                 return send(res, 200, body);
             }
 
@@ -705,31 +720,51 @@ function parentOf(dir: string): string | null {
 }
 
 /** Volumes worth offering in the picker, per platform. */
+/**
+ * Mounted volumes, one entry per actual device.
+ *
+ * Deduplication is by device id rather than by path, because macOS presents the
+ * startup disk at both `/` and `/Volumes/<name>` through a firmlink — listing
+ * both offers the same disk twice under different names. The home directory is
+ * almost always on a volume already listed, so it is only added as a
+ * convenience once the picker has a reason to exist at all.
+ */
 function listRoots(): { label: string; path: string }[] {
+    const seen = new Set<number>();
     const roots: { label: string; path: string }[] = [];
+
     const push = (label: string, path: string): void => {
-        const shown = toDisplayPath(path);
-        if (existsSync(path) && !roots.some((r) => r.path === shown)) roots.push({ label, path: shown });
+        let device: number;
+        try {
+            device = statSync(path).dev;
+        } catch {
+            return; // gone, or not readable
+        }
+        if (seen.has(device)) return;
+        seen.add(device);
+        roots.push({ label, path: toDisplayPath(path) });
     };
 
     if (process.platform === 'win32') {
         for (let c = 'A'.charCodeAt(0); c <= 'Z'.charCodeAt(0); c++) {
-            const drive = `${String.fromCharCode(c)}:${sep}`;
-            if (existsSync(drive)) roots.push({ label: drive, path: toDisplayPath(drive) });
+            push(`${String.fromCharCode(c)}:${sep}`, `${String.fromCharCode(c)}:${sep}`);
         }
     } else {
+        // "/" first, so the startup disk is named "/" rather than by whichever
+        // mount point happens to be read first.
         push('/', '/');
         for (const dir of ['/Volumes', '/media', '/mnt']) {
             if (!existsSync(dir)) continue;
             try {
                 for (const entry of readdirSync(dir, { withFileTypes: true })) {
-                    if (entry.isDirectory() || entry.isSymbolicLink()) push(join(dir, entry.name), join(dir, entry.name));
+                    if (entry.isDirectory() || entry.isSymbolicLink()) {
+                        push(entry.name, join(dir, entry.name));
+                    }
                 }
             } catch {
                 /* unreadable mount point */
             }
         }
     }
-    push('Home', homedir());
     return roots;
 }
