@@ -201,6 +201,8 @@ export type SelectionOp =
     | { op: 'extensions'; ranks: number[] }
     /** Apply to every file matching a name/path query, across the whole scan. */
     | { op: 'matching'; text: string; on: boolean }
+    /** Take what is not taken and drop what is; with `text`, only among matches. */
+    | { op: 'invert'; text?: string }
     | { op: 'clear' };
 
 /** One hit from the selection dialog's filter. */

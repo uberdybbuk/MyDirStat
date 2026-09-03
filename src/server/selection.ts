@@ -301,6 +301,91 @@ export class Selection {
         }
     }
 
+    /**
+     * Flip what is selected: everything picked is dropped, everything left is
+     * taken. With a `scope`, only those files flip and the rest stay as they are.
+     *
+     * The result is rewritten as fresh rules rather than kept as a "the answer
+     * is now backwards" flag. A flag would leak into every later edit — ticking
+     * a box would have to mean untick — and the rule set would stop describing
+     * what is actually selected. Rebuilding keeps one representation of the
+     * truth, and the rebuild is what stops it exploding: rules are emitted at
+     * the highest node that can carry them, so inverting a selection made of
+     * three folders comes back as a handful of rules, not a million.
+     */
+    invert(scope: readonly number[] | null): void {
+        const n = this.store.count;
+        const { selected } = this.resolve();
+        const want = new Uint8Array(n);
+
+        for (let i = 1; i < n; i++) {
+            if (this.pickable(i)) want[i] = scope === null ? (selected[i] === 1 ? 0 : 1) : selected[i];
+        }
+        if (scope !== null) {
+            for (const id of scope) {
+                if (id > 0 && id < n && this.pickable(id)) want[id] = want[id] === 1 ? 0 : 1;
+            }
+        }
+        this.rebuild(want);
+    }
+
+    /** Files that can be chosen at all: not directories, not unreadable, not gone. */
+    private pickable(i: number): boolean {
+        return (this.store.flags[i] & (F_DIR | F_ERROR | F_SKIPPED | F_GONE)) === 0;
+    }
+
+    /**
+     * Replace every rule with the smallest set that selects exactly `want`.
+     *
+     * Two passes: a reverse one counting, per subtree, how many files could be
+     * taken and how many should be; then a walk down from the root that stops
+     * as soon as a subtree is uniform — all wanted or none wanted — and emits a
+     * rule there only when it differs from what the node already inherits. Only
+     * subtrees that are genuinely mixed are descended into, so the rule count
+     * follows the shape of the boundary rather than the size of the tree.
+     */
+    private rebuild(want: Uint8Array): void {
+        const store = this.store;
+        const n = store.count;
+        const pool = new Uint32Array(n); // files that could be taken, per subtree
+        const take = new Uint32Array(n); // of those, the ones that should be
+
+        for (let i = n - 1; i >= 1; i--) {
+            if (this.pickable(i)) {
+                pool[i] += 1;
+                take[i] += want[i];
+            }
+            const p = store.parent[i];
+            if (p >= 0) {
+                pool[p] += pool[i];
+                take[p] += take[i];
+            }
+        }
+
+        this.included.clear();
+        this.excluded.clear();
+        // Type picks are absorbed into the explicit rules; leaving them on would
+        // re-add files the inversion has just dropped.
+        this.extensions.clear();
+
+        // 0 = the node inherits "not selected", 1 = it inherits "selected".
+        const stack: [number, number][] = [[0, 0]];
+        while (stack.length > 0) {
+            const [id, inherited] = stack.pop()!;
+            if (pool[id] === 0) continue; // nothing here to select either way
+            if (take[id] === 0) {
+                if (inherited === 1) this.excluded.add(id);
+                continue;
+            }
+            if (take[id] === pool[id]) {
+                if (inherited === 0) this.included.add(id);
+                continue;
+            }
+            for (const child of store.children(id)) stack.push([child, inherited]);
+        }
+        this.cache = null;
+    }
+
     setExtension(rank: number, on: boolean): void {
         if (on) this.extensions.add(rank);
         else this.extensions.delete(rank);

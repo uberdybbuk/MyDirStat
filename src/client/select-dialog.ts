@@ -88,6 +88,9 @@ export function initPicker(changed: (summary: SelectionSummary) => void): void {
 
     el('pickerTakeAll').onclick = () => void mutate({ op: 'matching', text: view.filter, on: true });
     el('pickerDropAll').onclick = () => void mutate({ op: 'matching', text: view.filter, on: false });
+    // Scoped to the matches while filtering, to the whole scan from the footer.
+    el('pickerFlipAll').onclick = () => void mutate({ op: 'invert', text: view.filter });
+    el('pickerInvert').onclick = () => void mutate({ op: 'invert' });
 
     el('pickerScroll').addEventListener('scroll', render, { passive: true });
 
@@ -301,7 +304,8 @@ function setSummary(summary: SelectionSummary): void {
               `${bytes(summary.bytes)} of ${bytes(summary.availableBytes)} · ` +
               `about ${bytes(summary.estimatedZipBytes)} zipped`;
     // Nothing selected means nothing to archive, clear or delete, so every
-    // action that acts on a selection is inert until there is one.
+    // action that acts on a selection is inert until there is one. Invert is
+    // not one of them: with nothing picked it means "take everything".
     const idle = summary.files === 0;
     for (const id of ['pickerZip', 'pickerClear', 'pickerTrash', 'pickerErase']) {
         el<HTMLButtonElement>(id).disabled = idle;
@@ -336,6 +340,7 @@ function rebuild(): void {
         : '';
     el('pickerTakeAll').textContent = `Select all ${count(view.hitTotal)}`;
     el('pickerDropAll').textContent = `Deselect all ${count(view.hitTotal)}`;
+    el('pickerFlipAll').textContent = `Invert ${count(view.hitTotal)}`;
     render();
 }
 

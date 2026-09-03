@@ -26,9 +26,14 @@ on paths alone offers the same disk twice under two names.
 - **Directory tree** — subtree sizes, share bars, item counts, modification dates,
   sortable on any column, expanded lazily, with Material file and folder icons.
   Drag a column edge to resize it, double-click the edge to reset it; widths
-  persist per pane.
+  persist per pane. Arrow keys walk it the way a tree is expected to behave:
+  up and down move between the rows on screen, right opens a folder and then
+  steps into it, left closes it and then steps out to its parent, Home and End
+  and the page keys jump, Enter zooms. Scrolling is minimal, so stepping through
+  a long list never makes it jump under the cursor.
 - **Extension legend** — every file type with its icon, colour, total size,
-  share and file count. Click a row to isolate that type on the map.
+  share and file count, sortable on any of the four columns. Click a row to
+  isolate that type on the map.
 - **Treemap** — a squarified cushion treemap where area is proportional to size
   and colour is the file type. Hover for the path relative to the scan root,
   click to select, double-click a folder to zoom, right-click for cleanup
@@ -68,9 +73,19 @@ mydirstat [directory] [options]
   -v, --version
 ```
 
-Sizes default to **on disk** (`st_blocks × 512`, so sparse files and slack are
-reported honestly); the toolbar toggles to **apparent** size, the plain sum of
-file lengths. Units are binary, matching `du` and WinDirStat rather than Finder.
+Sizes are **apparent** — the plain sum of file lengths, which is what an archive
+holds and what a copy of the tree would occupy elsewhere. Units are binary,
+matching `du` and WinDirStat rather than Finder. On-disk allocation
+(`st_blocks × 512`, counting sparse files and slack honestly) is still gathered
+per node and carried through the store; it has no control in the UI at present.
+
+A directory that does not exist, is not a directory, or cannot be listed is
+reported as such before any scan starts, in a bar under the toolbar. The check
+is an `opendir`, not an existence test: a folder that exists but cannot be read
+passes the latter, and the scan then finishes "successfully" over an empty tree,
+which reads as *this folder is empty* rather than *you are not allowed to look*.
+An unreadable directory found part way down a scan stays what it is — one faded
+row — since that is a fact about that directory, not a failed scan.
 
 By default the scan stays on one filesystem and counts a hardlinked file once.
 Pseudo-filesystems (`/proc`, `/sys`, `/dev`) and self-referential mounts are
@@ -82,7 +97,7 @@ skipped when they turn up as children, though you can still scan one directly.
 src/shared/protocol.ts   Wire contract + node flags, compiled into both builds
 src/server/              Scanner, store, pruning, HTTP server, CLI
 src/client/              Treemap renderer, three-pane UI, typed API client
-src/test/                Layout tests
+src/test/                Layout, selection and path tests
 public/                  index.html, style.css; js/ is build output
 bin/mydirstat.js         npm bin shim into dist/
 ```
@@ -93,28 +108,28 @@ Node types, and `src/shared` + `src/client` to `public/js/` under DOM types.
 boundary instead of trusted, and the flag bits have one definition rather than
 a copy in the client that can drift out of step with the scanner.
 
-Runtime dependencies are `material-icon-theme` (data: SVGs and a mapping
-table, no code) and `yazl` (zip writing, including ZIP64). TypeScript is
-dev-only.
+Runtime dependencies are `material-icon-theme` (data: SVGs and a mapping table,
+no code) and `7zip-bin` (7-Zip binaries for every platform, run as a child
+process). TypeScript is dev-only.
 
 ## How it works
 
 Three decisions carry most of the design.
 
 **The tree is columnar.** A million files as individual objects is hundreds of megabytes,
-so `src/store.js` keeps parallel typed arrays instead — about 45 bytes per node
+so `src/server/store.ts` keeps parallel typed arrays instead — about 45 bytes per node
 plus its UTF-8 name. Children are always allocated after their parent, so a
 single reverse pass is a valid post-order traversal; that is what makes subtree
 aggregation and dominant-extension propagation one cheap loop each. The arrays
 move from the scan worker to the server as transferable buffers with no
 serialisation step.
 
-**The scan runs on a worker thread.** `src/scan-worker.js` walks the tree with an
+**The scan runs on a worker thread.** `src/server/scan-worker.ts` walks the tree with an
 explicit stack and synchronous `fs` calls, which beat the promise machinery for a
 metadata-bound traversal, and posts throttled progress over SSE. Cancellation is
 a flag in a `SharedArrayBuffer`. Roughly 45k entries/second on a warm APFS cache.
 
-**The browser never receives the whole tree.** `src/treemap-query.js` prunes by
+**The browser never receives the whole tree.** `src/server/treemap-query.ts` prunes by
 *projected area*: given the canvas size, each node's value maps to the pixels it
 will occupy, so anything sub-pixel is folded into an aggregate tile and any
 directory too small to subdivide is left whole. A 340k-file scan becomes ~33k
@@ -161,11 +176,9 @@ allowlist, so a request cannot traverse out of the icon directory.
 **Select…** in the toolbar opens a checkbox tree over the scan. Everything —
 picking, archiving, deleting — happens inside that dialog; the main window never
 changes in response to a selection, so browsing disk usage and choosing files
-stay separate activities. Tick individual
-files or whole folders, or type a name or path fragment to filter and take the
-whole match in one click. All picking happens in that dialog: the main tree pane
-stays a read-only view of disk usage, so browsing can never change what is about
-to be archived. The dialog keeps its selection between openings.
+stay separate activities. Tick individual files or whole folders, or filter and
+take the whole match in one click. The dialog keeps its selection between
+openings.
 
 A decision on a folder is a statement about its whole subtree: ticking or
 unticking one clears any rule already sitting beneath it. Without that, a
@@ -188,18 +201,60 @@ folder does not un-expand its descendants, so a deeper folder can stay fresh
 while its own parent goes stale.
 
 Counts are always shown against the whole scan — *25 of 2,106 files · 183 KB of
-28.3 MB* — so the size of what you are choosing from is never hidden. Sizes in
-the dialog are logical bytes, which is what an archive holds; the main window's
-figures follow its own on-disk/apparent toggle, so the two legitimately differ.
+28.3 MB* — so the size of what you are choosing from is never hidden. That
+denominator shrinks when files are deleted, which is the sort of thing a cached
+total quietly gets wrong.
 
 The dialog is resizable from its bottom-right corner and remembers the size,
 clamped to the current viewport so a size set on an external monitor does not
 come back off-screen on a laptop.
 
+Escape closes exactly one thing: the topmost open dialog. Each dialog owning its
+own Escape handler is what let a single keypress close two of them — the inner
+one dismissed itself, the same event carried on to the window, and by then the
+dialog underneath looked like the topmost thing open. A job in progress is not
+dismissed by Escape at all; only its finished report is.
+
 The filter searches every file in the scan, not just the selected ones, so it
-can find things to add. Names are matched directly; a query containing `/` is
-matched against the relative path instead, which is the slower path and only
-taken when asked for.
+can find things to add. A term with no wildcard is a substring match, so typing
+part of a name still works; a term containing `*` or `?` is anchored and matched
+whole, which is what makes `*.cs` mean *C# files* rather than *contains .cs*.
+Terms are separated by `;` or `,`, and by spaces too once a wildcard is in play —
+`*.cs;*.txt` and `*.cs *.txt` both work, while a plain search for `my file` stays
+one term. A term containing `/` is matched against the path relative to the scan
+root instead of the name, which is the slower path and only taken when asked for.
+
+**Invert** takes everything that is not selected and drops everything that is.
+With a filter active the bulk bar offers the same thing over just the matches,
+which is how *everything except the logs* is expressed without listing anything.
+With nothing selected it means *take all*.
+
+Inverting rewrites the rules rather than setting a "the answer is now backwards"
+flag: a flag would leak into every later edit — ticking a box would have to mean
+untick — and the rule set would stop describing what is actually selected. The
+rewrite is what keeps it small. Rules are emitted at the highest node that can
+carry them, so a subtree that ends up wholly taken is one rule and only genuinely
+mixed folders are descended into; inverting *take `a/`* comes back as two rules,
+not one per file.
+
+### Selecting by file type
+
+**Select by file type…** opens the extension legend again, this time with
+checkboxes: every type in the scan with its size, share and file count, sortable
+on any column and filterable by name. Tick the types, press OK, and the file
+dialog comes back reflecting them.
+
+The list is the scan's own extensions, which is the point. A fixed menu of
+*text files*, *images* and so on is a list that is always wrong somewhere — the
+honest test for "is this text" is to read the file, and reading every file in a
+million-file scan is not on the table. Showing what is actually there, with its
+weight, asks nothing of a canned definition and never misses a type this
+particular tree happens to contain.
+
+Ticking a type is one rule over the whole scan, not a list of files, so *every
+`.mp4`* stays a single entry however many there are. The dialog is a
+transaction: nothing is applied while it is open, Cancel changes nothing, and
+reopening it starts from what is currently chosen.
 
 ### Compression
 
@@ -234,11 +289,34 @@ prefix and old enough that no live job could own them are touched.
 
 ### Deleting
 
-The dialog can also remove what is selected. **Move to Trash** is the default
-and is recoverable; **Delete permanently** requires typing the exact file count,
-so a stale dialog cannot delete a selection nobody looked at. Both report
-progress, can be cancelled, and update the tree, the legend and the treemap as
-they go rather than after the fact.
+The dialog can remove what is selected, and the type dialog can remove whole
+file types — every `.obj` and `.pdb` in the scan in one action, which is the
+shape most cleanup actually takes. **Move to Trash** is recoverable; **Delete
+permanently** requires typing the exact file count, so a stale dialog cannot
+delete a set nobody looked at, and the server checks that number against its own
+before it starts. Both report progress and can be cancelled.
+
+Deleting a file type does not go through the selection: it must not sweep up
+what is ticked in the tree, and ticking a type must not be the thing that arms a
+delete. Types travel to the server as names rather than as legend ranks — ranks
+are assigned per scan, and a stale rank would address the wrong type where a
+stale name simply matches nothing.
+
+**Nothing counts as deleted until its path is actually gone.** A helper that
+exits zero has not necessarily removed anything, and writing those bytes off as
+freed is worse than useless: the tree shrinks while the disk does not, and every
+share derived from those totals is then wrong. Each batch is verified against
+the filesystem afterwards, and whatever survived is listed by name with its
+reason in the progress dialog instead of being reported as a success.
+
+That check has already earned itself. On Windows the paths were passed as
+`powershell -Command <script> <paths…>`, which looks like arguments and is not:
+`-Command` takes everything after it as part of the command *text*, so `$args`
+stayed empty, the loop ran zero times, the process exited cleanly and nothing
+was ever recycled. Paths now travel in a UTF-8 list file — which also keeps
+non-ASCII names intact, where neither the command line nor stdin does reliably —
+and the script goes in as `-EncodedCommand`, where there is nothing left for a
+quoting layer to mangle.
 
 Trashing batches its calls. On macOS each `osascript` invocation costs around a
 hundred milliseconds, so one call per file would turn two thousand files into
@@ -246,8 +324,7 @@ minutes of process startup alone — 85 files take 0.7 s batched.
 
 Archives build to a temporary file with per-file progress and a cancel button,
 then download as a normal file of known size. Unreadable or vanished files are
-skipped and reported rather than aborting the archive. ZIP64 is handled by
-`yazl`, so selections over 4 GB or 65,535 files are fine.
+skipped and reported rather than aborting the archive.
 
 ## Cleanup actions
 
@@ -259,9 +336,22 @@ Right-click any tile or tree row:
 | Open | `open` | `start` | `xdg-open` |
 | Move to Trash | Finder via `osascript` | `SendToRecycleBin` | freedesktop `~/.local/share/Trash` |
 
-Permanent delete is behind a confirmation dialog. After a removal the node is
-detached and its bytes subtracted from every ancestor and from the legend, so
-the view stays correct without a rescan.
+Permanent delete is behind a confirmation dialog.
+
+After a removal the node is cut out of its parent's child chain and **every
+total is recomputed from the nodes that are left** — the same arithmetic the
+scan itself performed, so it cannot drift. Patching ancestors incrementally is
+cheaper and was how this worked; one miscount there leaves the tree permanently
+inconsistent, and the symptom is a directory reporting more bytes than the root
+containing it, which is where shares above 100% come from. The rebuild also
+re-derives the legend and the dominant type per directory, and marks the removed
+nodes gone, so a deleted file cannot turn up in a search or be selected again.
+
+Deleted nodes stay in the arrays but leave the tree, which the API has to
+account for: a request for a folder that has been deleted is answered 410 rather
+than with its remains, and the treemap climbs to the nearest folder that still
+exists and reports which one it used, so zooming into a folder and then deleting
+it moves the view up instead of leaving a ghost on screen.
 
 ## Security
 
@@ -287,7 +377,9 @@ cushion shading from van Wijk & van de Wetering (1999).
 npm test
 ```
 
-Covers the squarified layout: exact area coverage, no overlaps, area
-proportional to value, and aspect ratios staying square enough to be useful.
+Covers the squarified layout — exact area coverage, no overlaps, area
+proportional to value, aspect ratios staying square enough to be useful — the
+selection rule algebra, including nearest-rule-wins and folder decisions
+clearing the rules beneath them, and path display/round-tripping.
 
 `npm run typecheck` type-checks the server, client and test projects together.

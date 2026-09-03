@@ -501,6 +501,15 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                             else selection.exclude(ids);
                             break;
                         }
+                        case 'invert': {
+                            const text = (body.text ?? '').trim();
+                            selection.invert(
+                                text.length > 0
+                                    ? selection.searchAll(text, Number.MAX_SAFE_INTEGER).ids
+                                    : null
+                            );
+                            break;
+                        }
                         case 'clear': selection.clear(); break;
                         default: return send(res, 400, { error: 'Unknown selection op' });
                     }
