@@ -250,15 +250,104 @@ async function revealInTree(id: number): Promise<void> {
         state.expanded.add(link.i);
     }
     rebuildVisible();
+    // Arriving from the treemap, the row could be anywhere; centring it gives
+    // the surrounding context that a minimal scroll would not.
+    scrollRowIntoView(state.visible.findIndex((v) => v.id === id), true);
+}
 
-    const index = state.visible.findIndex((v) => v.id === id);
+/**
+ * Bring a row into view, moving as little as possible. Stepping through a tree
+ * with the arrow keys must not make the list jump under the cursor, so this
+ * scrolls by exactly the row that fell off the edge.
+ */
+function scrollRowIntoView(index: number, centre = false): void {
     if (index < 0) return;
     const scroll = el('treeScroll');
     const top = index * ROW_H;
-    if (top < scroll.scrollTop || top + ROW_H > scroll.scrollTop + scroll.clientHeight) {
-        scroll.scrollTop = top - scroll.clientHeight / 2;
-    }
+    const bottom = top + ROW_H;
+    if (top >= scroll.scrollTop && bottom <= scroll.scrollTop + scroll.clientHeight) return;
+
+    scroll.scrollTop = centre
+        ? top - scroll.clientHeight / 2
+        : top < scroll.scrollTop ? top
+        : bottom - scroll.clientHeight;
     renderTreeWindow();
+}
+
+/* --------------------------------------------------------- tree keyboard -- */
+
+/**
+ * The keys a tree is expected to answer to, near enough to the ARIA tree
+ * pattern that nobody has to learn them: up and down walk the rows that are on
+ * screen, right opens a folder and then steps into it, left closes it and then
+ * steps out to its parent. Enter zooms, matching a double-click.
+ */
+const TREE_KEYS = new Set([
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+    'Home', 'End', 'PageUp', 'PageDown', 'Enter',
+]);
+
+async function focusRow(index: number): Promise<void> {
+    const target = state.visible[index];
+    if (!target) return;
+    scrollRowIntoView(index);
+    await select(target.id, { fromTree: true });
+}
+
+/** Row index of the nearest ancestor above `index`, or -1 at the top level. */
+function parentRow(index: number): number {
+    const depth = state.visible[index].depth;
+    for (let k = index - 1; k >= 0; k--) {
+        if (state.visible[k].depth < depth) return k;
+    }
+    return -1;
+}
+
+async function navigateTree(key: string): Promise<void> {
+    const last = state.visible.length - 1;
+    if (last < 0) return;
+
+    // Nothing focused yet, or the focused row is inside a folder that has since
+    // been collapsed: the first key press lands on the root.
+    const index = state.visible.findIndex((v) => v.id === state.selected);
+    if (index < 0) return focusRow(0);
+
+    const page = Math.max(1, Math.floor(el('treeScroll').clientHeight / ROW_H) - 1);
+    const { id } = state.visible[index];
+    const row = state.rows.get(id);
+    const branch = ((row?.flags ?? 0) & F_DIR) !== 0 && (row?.kids ?? false);
+    const open = state.expanded.has(id);
+
+    switch (key) {
+        case 'ArrowDown': return focusRow(Math.min(index + 1, last));
+        case 'ArrowUp': return focusRow(Math.max(index - 1, 0));
+        case 'PageDown': return focusRow(Math.min(index + page, last));
+        case 'PageUp': return focusRow(Math.max(index - page, 0));
+        case 'Home': return focusRow(0);
+        case 'End': return focusRow(last);
+
+        case 'ArrowRight':
+            if (!branch) return;
+            // Open it first; a second press is what steps inside.
+            if (!open) {
+                await toggle(id, true);
+                scrollRowIntoView(state.visible.findIndex((v) => v.id === id));
+                return;
+            }
+            return focusRow(Math.min(index + 1, last));
+
+        case 'ArrowLeft':
+            if (branch && open) {
+                await toggle(id, false);
+                scrollRowIntoView(state.visible.findIndex((v) => v.id === id));
+                return;
+            }
+            return focusRow(parentRow(index));
+
+        case 'Enter':
+            if (branch) await zoomTo(id);
+            return;
+    }
 }
 
 /* ------------------------------------------------------ extension pane ---- */
@@ -366,9 +455,16 @@ async function select(id: number, { fromTree = false } = {}): Promise<void> {
     if (!fromTree) await revealInTree(id);
 }
 
+let statusRequest = 0;
+
 async function showStatus(id: number): Promise<void> {
+    // Holding an arrow key fires one of these per row; without a sequence
+    // number a slower reply could land after a newer one and describe a row
+    // the cursor has already left.
+    const seq = ++statusRequest;
     try {
         const node = await api.node(id);
+        if (seq !== statusRequest) return;
         el('statusPath').textContent = node.path;
         const parts = [bytes(valueOf(node))];
         if (node.flags & F_DIR) parts.push(`${count(node.files)} files`, `${count(node.dirs)} folders`);
@@ -581,7 +677,17 @@ for (const button of all<HTMLButtonElement>('.pane-head [data-esort]')) {
 
 el('treeScroll').addEventListener('scroll', renderTreeWindow, { passive: true });
 
+el('treeScroll').addEventListener('keydown', (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || !TREE_KEYS.has(e.key)) return;
+    // Otherwise the browser scrolls the pane as well as moving the row.
+    e.preventDefault();
+    void navigateTree(e.key);
+});
+
 el('treeRows').addEventListener('click', (e) => {
+    // Clicking a row hands the pane the keyboard, so the arrows carry on from
+    // where the click landed. preventScroll: the click already put it in view.
+    el('treeScroll').focus({ preventScroll: true });
     const target = e.target as HTMLElement;
     const twisty = target.closest<HTMLElement>('[data-twisty]');
     if (twisty) {
