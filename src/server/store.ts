@@ -16,6 +16,7 @@
 import { F_DIR } from '../shared/protocol.js';
 
 export const F_AGG = 32; // synthetic aggregate node, server-side only
+export const F_GONE = 64; // removed from disk; still in the arrays, not in the tree
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -76,6 +77,14 @@ export class NodeStore {
 
     root = '';
     cancelled = false;
+
+    /**
+     * Allocation each node owns by itself, children excluded. Only meaningful
+     * for directories — a file's own allocation is simply `alloc[i]` — and only
+     * present once something is about to be removed, since it exists purely so
+     * `recompute()` can rebuild the totals from scratch. See `captureOwn()`.
+     */
+    ownAlloc: Float64Array | null = null;
 
     constructor(capacity = 4096, nameCapacity = 1 << 16) {
         this.cap = capacity;
@@ -211,6 +220,119 @@ export class NodeStore {
         }
     }
 
+    /**
+     * Remember what every node contributes on its own, before anything is
+     * removed from the tree.
+     *
+     * Aggregation is destructive: after it, a directory's `alloc` is its whole
+     * subtree and the few kilobytes the directory entry itself occupies can no
+     * longer be told apart. Recovering it needs a tree that still adds up, so
+     * the snapshot has to be taken before the first removal. Idempotent, and
+     * only paid for when the user actually deletes something.
+     */
+    captureOwn(): void {
+        if (this.ownAlloc) return;
+        const own = new Float64Array(this.count);
+        own.set(this.alloc.subarray(0, this.count));
+        for (let i = 1; i < this.count; i++) {
+            const p = this.parent[i];
+            if (p >= 0) own[p] -= this.alloc[i];
+        }
+        this.ownAlloc = own;
+    }
+
+    /**
+     * Rebuild every total from the nodes still attached to the root.
+     *
+     * Deletion used to patch the totals in place, subtracting each removed node
+     * from its ancestors. One miscount there — a node accounted for twice, or a
+     * removal that never happened on disk — leaves the tree permanently
+     * inconsistent, and the symptom is a directory reporting more bytes than the
+     * root that contains it, which is where shares above 100% come from. Summing
+     * the survivors instead cannot drift: it is the same arithmetic the scan
+     * itself performed.
+     *
+     * Nodes that have been unlinked keep their `parent` entry, so reachability
+     * is established by walking the child chains rather than trusting it.
+     */
+    recompute(): void {
+        const { parent, size, alloc, files, dirs, flags, child0, sib, ext } = this;
+        const own = this.ownAlloc;
+
+        const live = new Uint8Array(this.count);
+        const stack: number[] = this.count > 0 ? [0] : [];
+        while (stack.length > 0) {
+            const n = stack.pop()!;
+            live[n] = 1;
+            for (let c = child0[n]; c !== -1; c = sib[c]) stack.push(c);
+        }
+
+        for (let i = 0; i < this.count; i++) {
+            if (live[i] === 0) {
+                // Everything that walks the arrays directly — the extension
+                // legend, the selection, the search — has to know these are no
+                // longer there, or a deleted file stays selectable.
+                flags[i] |= F_GONE;
+                continue;
+            }
+            files[i] = 0;
+            dirs[i] = 0;
+            // A file's own size is already in place and is never touched; a
+            // directory holds no bytes of its own beyond its allocation.
+            if (flags[i] & F_DIR) size[i] = 0;
+            alloc[i] = own ? own[i] : (flags[i] & F_DIR ? 0 : alloc[i]);
+        }
+
+        // A live node's parent is live by construction, so one reverse pass is
+        // again a valid post-order roll-up.
+        for (let i = this.count - 1; i > 0; i--) {
+            if (live[i] === 0) continue;
+            const p = parent[i];
+            size[p] += size[i];
+            alloc[p] += alloc[i];
+            files[p] += files[i];
+            dirs[p] += dirs[i];
+            if (flags[i] & F_DIR) dirs[p] += 1;
+            else files[p] += 1;
+        }
+
+        // The legend is a second view of the same bytes and drifts the same way.
+        const n = this.extNames.length;
+        const bySize = new Float64Array(n);
+        const byAlloc = new Float64Array(n);
+        const byCount = new Uint32Array(n);
+        for (let i = 0; i < this.count; i++) {
+            const e = ext[i];
+            if (live[i] === 0 || e < 0) continue;
+            bySize[e] += size[i];
+            byAlloc[e] += alloc[i];
+            byCount[e] += 1;
+        }
+        // Ranks stay put: they decide colours, and a delete must not repaint the
+        // whole treemap.
+        this.extSize = Array.from(bySize);
+        this.extAlloc = Array.from(byAlloc);
+        this.extCount = Array.from(byCount);
+
+        // Same roll-up as computeDominant(), restricted to the survivors — a
+        // deleted file must not keep colouring the directory it was in.
+        const domBytes = new Float64Array(this.count);
+        for (let i = 0; i < this.count; i++) {
+            if (live[i] === 0) continue;
+            const isFile = (flags[i] & F_DIR) === 0;
+            domBytes[i] = isFile ? alloc[i] : 0;
+            this.domExt[i] = isFile ? ext[i] : -1;
+        }
+        for (let i = this.count - 1; i > 0; i--) {
+            if (live[i] === 0) continue;
+            const p = parent[i];
+            if (domBytes[i] > domBytes[p]) {
+                domBytes[p] = domBytes[i];
+                this.domExt[p] = this.domExt[i];
+            }
+        }
+    }
+
     /** Order every sibling chain by allocated size, largest first. */
     sortChildren(): void {
         const { alloc, size, child0, sib, last } = this;
@@ -340,6 +462,8 @@ export class NodeStore {
         store.extAlloc = payload.extAlloc;
         store.extCount = payload.extCount;
         store.cancelled = false;
+        // Object.create skips field initialisers, so this is not redundant.
+        store.ownAlloc = null;
         return store;
     }
 }

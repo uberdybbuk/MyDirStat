@@ -18,7 +18,7 @@ import { promises as fs } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import { basename, dirname, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import type { DeleteFailure, DeleteMode, DeleteState, DeleteStatus, DeleteTarget } from '../shared/protocol.js';
 
 const run = promisify(execFile);
@@ -102,38 +102,56 @@ export class DeleteJob {
     }
 
     private async removeChunk(chunk: DeleteTarget[]): Promise<void> {
-        if (this.mode === 'permanent') {
-            for (const target of chunk) await this.removeOne(target, () => fs.rm(target.path, { force: true }));
-            return;
-        }
-
-        if (process.platform === 'linux') {
-            for (const target of chunk) await this.removeOne(target, () => freedesktopTrash(target.path));
-            return;
-        }
-
-        try {
-            await trashBatch(chunk.map((t) => t.path));
-            for (const target of chunk) this.accountFor(target);
-        } catch (err) {
-            // A batch that fails as a whole says nothing about which member was
-            // at fault, so fall back to one at a time to attribute the failure.
-            for (const target of chunk) {
-                await this.removeOne(target, () => trashBatch([target.path]));
+        const reasons = new Map<number, string>();
+        const attempt = async (target: DeleteTarget, remove: () => Promise<unknown>): Promise<void> => {
+            this.currentPath = target.label;
+            try {
+                await remove();
+            } catch (err) {
+                reasons.set(target.id, (err as Error).message.split('\n')[0]);
             }
-            void err;
+        };
+
+        if (this.mode === 'permanent') {
+            for (const target of chunk) await attempt(target, () => fs.rm(target.path, { force: true }));
+        } else if (process.platform === 'linux') {
+            for (const target of chunk) await attempt(target, () => freedesktopTrash(target.path));
+        } else {
+            try {
+                await trashBatch(chunk.map((t) => t.path));
+            } catch {
+                // A batch that fails as a whole says nothing about which member
+                // was at fault, so fall back to one at a time to attribute it.
+                for (const target of chunk) await attempt(target, () => trashBatch([target.path]));
+            }
         }
+
+        await this.confirm(chunk, reasons);
     }
 
-    private async removeOne(target: DeleteTarget, remove: () => Promise<unknown>): Promise<void> {
-        this.currentPath = target.label;
-        try {
-            await remove();
-            this.accountFor(target);
-        } catch (err) {
-            this.failures.push({ path: target.label, reason: (err as Error).message.split('\n')[0] });
+    /**
+     * Believe the filesystem, not the tool.
+     *
+     * A helper that exits zero has not necessarily deleted anything — a shell
+     * that swallowed its arguments, a trash implementation that declined
+     * silently. Counting those as freed bytes is worse than useless: the tree
+     * shrinks while the disk does not, and every share it derives from those
+     * totals is then wrong. So a target is only written off once its path is
+     * actually gone.
+     */
+    private async confirm(chunk: DeleteTarget[], reasons: Map<number, string>): Promise<void> {
+        const present = await Promise.all(chunk.map((t) => stillThere(t.path)));
+        chunk.forEach((target, k) => {
+            if (!present[k]) {
+                this.accountFor(target);
+                return;
+            }
+            this.failures.push({
+                path: target.label,
+                reason: reasons.get(target.id) ?? 'reported as removed but still on disk',
+            });
             this.filesDone++;
-        }
+        });
     }
 
     private accountFor(target: DeleteTarget): void {
@@ -164,20 +182,66 @@ async function trashBatch(paths: string[]): Promise<void> {
     }
 
     if (process.platform === 'win32') {
-        const script =
-            'Add-Type -AssemblyName Microsoft.VisualBasic;' +
-            'foreach ($p in $args) {' +
-            '  if (Test-Path -LiteralPath $p -PathType Container) {' +
-            '    [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, "OnlyErrorDialogs", "SendToRecycleBin")' +
-            '  } else {' +
-            '    [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, "OnlyErrorDialogs", "SendToRecycleBin")' +
-            '  }' +
-            '}';
-        await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', script, ...paths]);
+        await windowsRecycle(paths);
         return;
     }
 
     for (const path of paths) await freedesktopTrash(path);
+}
+
+/**
+ * Recycle Bin, via the shell API that VB.NET exposes.
+ *
+ * The paths travel in a file rather than on the command line. `powershell
+ * -Command <script> <paths…>` looks like it passes arguments, but `-Command`
+ * takes everything after it as *part of the command text*: `$args` stays empty,
+ * so the loop ran zero times while the process still exited cleanly — nothing
+ * was ever recycled, and the tree was told it had been. A list file also keeps
+ * UTF-16 path names intact, which neither the command line nor stdin does
+ * reliably on Windows PowerShell.
+ *
+ * The script itself goes in as -EncodedCommand for the same class of reason:
+ * base64 has nothing left for a quoting layer to mangle.
+ */
+async function windowsRecycle(paths: string[]): Promise<void> {
+    const list = join(tmpdir(), `mydirstat-trash-${randomBytes(8).toString('hex')}.txt`);
+    await fs.writeFile(list, paths.join('\r\n'), 'utf8');
+    try {
+        const literal = list.replace(/'/g, "''");
+        const script = [
+            'Add-Type -AssemblyName Microsoft.VisualBasic',
+            `foreach ($p in [System.IO.File]::ReadAllLines('${literal}', [System.Text.Encoding]::UTF8)) {`,
+            '    if ($p.Length -eq 0) { continue }',
+            // ThrowException, so a refusal surfaces as a failure here instead of
+            // as a modal dialog on a machine nobody is looking at.
+            '    if ([System.IO.Directory]::Exists($p)) {',
+            "        [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, 'OnlyErrorDialogs', 'SendToRecycleBin', 'ThrowException')",
+            '    } else {',
+            "        [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin', 'ThrowException')",
+            '    }',
+            '}',
+        ].join('\n');
+        await run('powershell', [
+            '-NoProfile', '-NonInteractive',
+            '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
+        ]);
+    } finally {
+        await fs.rm(list, { force: true });
+    }
+}
+
+/**
+ * Whether the path is still on disk. Anything other than a plain "no such
+ * file" counts as present: a delete that cannot be verified must not be
+ * reported as one.
+ */
+async function stillThere(path: string): Promise<boolean> {
+    try {
+        await fs.lstat(path);
+        return true;
+    } catch (err) {
+        return (err as NodeJS.ErrnoException).code !== 'ENOENT';
+    }
 }
 
 /** XDG trash spec, so the desktop's "restore" knows where the file came from. */

@@ -49,10 +49,10 @@
 
             <section class="pane" id="extPane">
                 <div class="pane-head ext-grid">
-                    <span class="col-type">Type</span>
-                    <span class="col-num">Size<span class="grip" data-grip="esize" title="Drag to resize, double-click to reset"></span></span>
-                    <span class="col-pct">Share<span class="grip" data-grip="epct" title="Drag to resize, double-click to reset"></span></span>
-                    <span class="col-num">Files<span class="grip" data-grip="ecount" title="Drag to resize, double-click to reset"></span></span>
+                    <button data-esort="type" class="col-type">Type</button>
+                    <button data-esort="size" class="col-num on">Size<span class="grip" data-grip="esize" title="Drag to resize, double-click to reset"></span></button>
+                    <button data-esort="pct" class="col-pct">Share<span class="grip" data-grip="epct" title="Drag to resize, double-click to reset"></span></button>
+                    <button data-esort="count" class="col-num">Files<span class="grip" data-grip="ecount" title="Drag to resize, double-click to reset"></span></button>
                 </div>
                 <div class="scroll" id="extScroll">
                     <div id="extRows"></div>
@@ -94,7 +94,8 @@
         </header>
 
         <div class="review-filters">
-            <input id="pickerFilter" type="search" placeholder="Filter file names, or a path fragment&hellip;" spellcheck="false">
+            <input id="pickerFilter" type="search" placeholder="Filter by name, path, or wildcards like *.cs;*.txt&hellip;" spellcheck="false">
+            <button id="pickerTypes">Select by file type&hellip;</button>
             <span id="pickerBulk" class="bulk" hidden>
                 <button id="pickerTakeAll">Select all</button>
                 <button id="pickerDropAll">Deselect all</button>
@@ -121,6 +122,39 @@
     </div>
 </div>
 
+<div id="types" class="modal" hidden>
+    <div class="sheet wide types-sheet" id="typesSheet">
+        <header class="review-head">
+            <h2>Select file types</h2>
+            <span id="typesTotals" class="dim"></span>
+            <button id="typesClose" class="icon" title="Close">&times;</button>
+        </header>
+
+        <div class="review-filters">
+            <input id="typesFilter" type="search" placeholder="Filter types&hellip;" spellcheck="false">
+            <button id="typesAll">Select all</button>
+            <button id="typesNone">Clear</button>
+        </div>
+
+        <div class="pane-head type-grid">
+            <button data-tsort="type" class="col-type">Type</button>
+            <button data-tsort="size" class="col-num on">Size</button>
+            <button data-tsort="pct" class="col-pct">Share</button>
+            <button data-tsort="count" class="col-num">Files</button>
+        </div>
+        <div class="scroll picker-scroll" id="typesScroll">
+            <div class="sizer" id="typesSizer"><div class="rows" id="typesRows"></div></div>
+        </div>
+
+        <div class="sheet-actions">
+            <span id="typesNote" class="dim"></span>
+            <span class="spacer"></span>
+            <button id="typesCancel">Cancel</button>
+            <button id="typesOk" class="primary">OK</button>
+        </div>
+    </div>
+</div>
+
 <div id="confirmDelete" class="modal" hidden>
     <div class="sheet">
         <h2>Delete permanently</h2>
@@ -141,6 +175,7 @@
         <div class="bar"><i id="delBar"></i></div>
         <p id="delDetail" class="dim"></p>
         <p id="delPath" class="zip-path"></p>
+        <ul id="delFailures" class="failures" hidden></ul>
         <div class="sheet-actions">
             <span class="spacer"></span>
             <button id="delCancel">Cancel</button>

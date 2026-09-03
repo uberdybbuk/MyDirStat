@@ -195,11 +195,15 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
     }
 
     /**
-     * Detach a node after it has been deleted on disk, subtracting its totals
-     * from every ancestor and from the extension legend, so the UI stays honest
-     * without forcing a rescan.
+     * Cut a node out of its parent's child chain after it has been removed from
+     * disk, so the UI stays honest without forcing a rescan.
+     *
+     * Only the link is touched. Every total is rebuilt afterwards by
+     * `store.recompute()`, once per batch rather than once per node: patching
+     * ancestor totals node by node is what let a single miscount leave a
+     * directory reporting more bytes than the root above it.
      */
-    function detach(store: NodeStore, id: number): void {
+    function unlink(store: NodeStore, id: number): void {
         const parent = store.parent[id];
         if (parent < 0) return;
 
@@ -211,30 +215,13 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
         if (prev === -1) store.child0[parent] = store.sib[id];
         else store.sib[prev] = store.sib[id];
         if (store.last[parent] === id) store.last[parent] = prev;
+        store.sib[id] = -1;
+    }
 
-        const isDir = (store.flags[id] & F_DIR) !== 0;
-        const dSize = store.size[id];
-        const dAlloc = store.alloc[id];
-        const dFiles = store.files[id] + (isDir ? 0 : 1);
-        const dDirs = store.dirs[id] + (isDir ? 1 : 0);
-        for (let n = parent; n !== -1; n = store.parent[n]) {
-            store.size[n] -= dSize;
-            store.alloc[n] -= dAlloc;
-            store.files[n] -= dFiles;
-            store.dirs[n] -= dDirs;
-        }
-
-        const stack = [id];
-        while (stack.length > 0) {
-            const n = stack.pop()!;
-            const e = store.ext[n];
-            if (e >= 0) {
-                store.extSize[e] -= store.size[n];
-                store.extAlloc[e] -= store.alloc[n];
-                store.extCount[e] -= 1;
-            }
-            for (const c of store.children(n)) stack.push(c);
-        }
+    /** Re-derive every total, and drop the selection totals computed from them. */
+    function settle(store: NodeStore): void {
+        store.recompute();
+        selection?.invalidate();
     }
 
     // ----------------------------------------------------------------- routing
@@ -492,6 +479,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                         case 'exclude': selection.exclude(body.ids); break;
                         case 'toggle': selection.toggle(body.ids); break;
                         case 'extension': selection.setExtension(body.ext, body.on); break;
+                        case 'extensions': selection.setExtensions(body.ranks); break;
                         case 'matching': {
                             const { ids } = selection.searchAll(body.text, Number.MAX_SAFE_INTEGER);
                             if (body.on) selection.include(ids);
@@ -617,13 +605,16 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                     }
                 }
 
+                // Own totals have to be recorded while the tree still adds up.
+                store.captureOwn();
                 deletion = new DeleteJob(
                     targets,
                     mode,
-                    (id) => detach(store, id),
+                    (id) => unlink(store, id),
                     (job) => broadcast('delete', job.status())
                 );
                 void deletion.done.then(() => {
+                    settle(store);
                     // The rules point at nodes that no longer exist.
                     selection?.clear();
                     broadcast('done', summary());
@@ -693,12 +684,16 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                     case 'open': await actions.open(target); break;
                     case 'trash':
                         await actions.trash(target);
-                        detach(store, id);
+                        store.captureOwn();
+                        unlink(store, id);
+                        settle(store);
                         break;
                     case 'delete':
                         if (id === 0) return send(res, 400, { error: 'Refusing to delete the scan root' });
                         await actions.remove(target);
-                        detach(store, id);
+                        store.captureOwn();
+                        unlink(store, id);
+                        settle(store);
                         break;
                     default:
                         return send(res, 400, { error: `Unknown action: ${String(op)}` });

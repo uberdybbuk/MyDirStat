@@ -5,6 +5,7 @@ import { api, requestedPath, setUrlPath } from './api.js';
 import { el, all, escapeHtml, hexToRgb } from './dom.js';
 import { bytes, count, percent, when } from './format.js';
 import { installColumnResizers, TREE_COLUMNS, EXT_COLUMNS } from './columns.js';
+import { initTypes } from './type-dialog.js';
 import { initPicker, openPicker, closePicker, isOpen as isPickerOpen, selectedFormat } from './select-dialog.js';
 import { ARCHIVE_FORMATS, F_DIR, F_LINK, F_ERROR, F_SKIPPED, F_DUP } from '../shared/protocol.js';
 import type {
@@ -30,6 +31,7 @@ const METRIC: SizeMetric = 'size';
 const MIN_TILE = 4;
 
 type SortKey = 'name' | 'size' | 'pct' | 'items' | 'mtime';
+type ExtSortKey = 'type' | 'size' | 'pct' | 'count';
 
 interface VisibleRow {
     id: number;
@@ -52,6 +54,7 @@ interface State {
     specialRgb: Record<keyof SpecialColors, Rgb>;
     highlight: number | null;
     sort: { key: SortKey; dir: 1 | -1 };
+    extSort: { key: ExtSortKey; dir: 1 | -1 };
     menuTarget: number | null;
     selection: SelectionSummary | null;
     zipId: string | null;
@@ -73,6 +76,7 @@ const state: State = {
     specialRgb: { dir: [107, 114, 128], other: [139, 144, 150], unreadable: [84, 88, 94] },
     highlight: null,
     sort: { key: 'size', dir: -1 },
+    extSort: { key: 'size', dir: -1 },
     menuTarget: null,
     selection: null,
     zipId: null,
@@ -268,9 +272,24 @@ async function loadExtensions(): Promise<void> {
     renderExtensions();
 }
 
+function sortExtensions(): ExtensionRow[] {
+    const { key, dir } = state.extSort;
+    // Share is size over a fixed total, so it orders exactly as size does; it
+    // gets its own key only so the header shows which column was clicked.
+    const get = (r: ExtensionRow): string | number =>
+        key === 'type' ? r.label.toLowerCase() : key === 'count' ? r.count : r.size;
+    return [...state.extensions].sort((a, b) => {
+        const x = get(a);
+        const y = get(b);
+        if (x < y) return -dir;
+        if (x > y) return dir;
+        return a.label.localeCompare(b.label);
+    });
+}
+
 function renderExtensions(): void {
     const total = state.extensions.reduce((a, r) => a + r.size, 0) || 1;
-    el('extRows').innerHTML = state.extensions
+    el('extRows').innerHTML = sortExtensions()
         .map((r) => {
             const value = r.size;
             const share = value / total;
@@ -524,6 +543,19 @@ for (const button of all<HTMLButtonElement>('.pane-head [data-sort]')) {
         state.sort = { key, dir: state.sort.key === key ? (-state.sort.dir as 1 | -1) : key === 'name' ? 1 : -1 };
         for (const b of all<HTMLButtonElement>('.pane-head [data-sort]')) b.classList.toggle('on', b === button);
         rebuildVisible();
+    };
+}
+
+for (const button of all<HTMLButtonElement>('.pane-head [data-esort]')) {
+    button.onclick = () => {
+        const key = button.dataset.esort as ExtSortKey;
+        // Names read best ascending; every quantity reads best largest first.
+        state.extSort = {
+            key,
+            dir: state.extSort.key === key ? (-state.extSort.dir as 1 | -1) : key === 'type' ? 1 : -1,
+        };
+        for (const b of all<HTMLButtonElement>('.pane-head [data-esort]')) b.classList.toggle('on', b === button);
+        renderExtensions();
     };
 }
 
@@ -785,6 +817,7 @@ el('pickerZip').onclick = () => {
 };
 
 initPicker(applySelection);
+initTypes();
 
 /* ------------------------------------------------------------------ zip --- */
 
@@ -882,6 +915,18 @@ function renderDelete(status: DeleteStatus): void {
     if (status.error) parts.push(status.error);
     el('delDetail').textContent = parts.join(' · ');
     el('delPath').textContent = running ? status.currentPath : '';
+
+    // What survived matters more than the count of it: "moved to Trash" over a
+    // file that is still there is exactly the report this dialog must not give.
+    const failures = el('delFailures');
+    failures.hidden = status.failures.length === 0;
+    failures.innerHTML = status.failures
+        .slice(0, 12)
+        .map((f) => `<li><b>${escapeHtml(f.path)}</b><span>${escapeHtml(f.reason)}</span></li>`)
+        .join('') +
+        (status.failures.length > 12
+            ? `<li class="more">${count(status.failures.length - 12)} more</li>`
+            : '');
 
     el('delCancel').hidden = !running;
     el('delClose').hidden = running;

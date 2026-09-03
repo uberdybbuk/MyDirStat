@@ -446,7 +446,35 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .review-head .icon { margin-left: auto; padding: 2px 8px; font-size: 16px; line-height: 1; }
 
 .review-filters { display: flex; gap: 8px; margin: 12px 0 8px; }
-.review-filters input { flex: 1; }
+.review-filters input { flex: 1; min-width: 0; }
+.review-filters button { flex: none; }
+
+/* ------------------------------------------------------------ file types -- */
+
+/* Narrower than the file picker: four short columns, no paths to show. */
+.types-sheet { width: min(660px, 92vw); height: min(640px, 86vh); min-width: 400px; }
+.types-sheet .pane-head { border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0; }
+.types-sheet .picker-scroll { border-radius: 0 0 6px 6px; }
+.type-grid {
+    display: grid;
+    grid-template-columns: minmax(90px, 1fr) 92px 88px 74px;
+}
+/* Rows are taller here than in the pane: they carry a checkbox and are meant
+   to be clicked, not just read. */
+#typesRows .erow { height: 24px; cursor: pointer; }
+#typesRows .name { padding-left: 8px; }
+
+/* Every failed removal, named. A count alone would leave the user to guess
+   which files are still on disk. */
+.failures {
+    margin: 6px 0 0; padding: 6px 8px; max-height: 132px; overflow-y: auto;
+    list-style: none; font-size: 12px;
+    background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 6px;
+}
+.failures li { display: flex; gap: 8px; padding: 2px 0; }
+.failures b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.failures span { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.failures .more { color: var(--text-dim); }
 
 .facets { display: none; flex-wrap: wrap; }
 .unused-facets { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; max-height: 58px; overflow-y: auto; }

@@ -197,6 +197,8 @@ export type SelectionOp =
     | { op: 'exclude'; ids: number[] }
     | { op: 'toggle'; ids: number[] }
     | { op: 'extension'; ext: number; on: boolean }
+    /** The complete set of file types to take, replacing whatever was picked. */
+    | { op: 'extensions'; ranks: number[] }
     /** Apply to every file matching a name/path query, across the whole scan. */
     | { op: 'matching'; text: string; on: boolean }
     | { op: 'clear' };

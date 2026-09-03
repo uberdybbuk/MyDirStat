@@ -16,6 +16,7 @@
 import { api } from './api.js';
 import { el, escapeHtml } from './dom.js';
 import { bytes, count } from './format.js';
+import { openTypes } from './type-dialog.js';
 import { ARCHIVE_FORMATS, F_DIR } from '../shared/protocol.js';
 import type { ArchiveFormat, SearchHit, SelectionSummary, TreeRow } from '../shared/protocol.js';
 
@@ -39,6 +40,8 @@ const view = {
     hits: [] as SearchHit[],
     hitTotal: 0,
     generation: 0,
+    /** Extension ranks currently selected, so the type dialog opens on them. */
+    rules: [] as number[],
 };
 
 let onChanged: (summary: SelectionSummary) => void = () => undefined;
@@ -72,6 +75,10 @@ export function initPicker(changed: (summary: SelectionSummary) => void): void {
     el('pickerClose').onclick = closePicker;
     el('pickerDone').onclick = closePicker;
     el('pickerClear').onclick = () => void mutate({ op: 'clear' });
+
+    // Types are picked in their own dialog and land here as rules over the whole
+    // scan, so the tree comes back reflecting them wherever those files are.
+    el('pickerTypes').onclick = () => void chooseTypes();
 
     let debounce: ReturnType<typeof setTimeout> | null = null;
     el<HTMLInputElement>('pickerFilter').oninput = () => {
@@ -219,6 +226,12 @@ async function applyFilter(text: string): Promise<void> {
     rebuild();
 }
 
+async function chooseTypes(): Promise<void> {
+    const chosen = await openTypes(view.rules);
+    if (chosen === null) return; // dismissed: leave the selection alone
+    await mutate({ op: 'extensions', ranks: chosen });
+}
+
 async function mutate(op: Parameters<typeof api.selection>[0]): Promise<void> {
     try {
         const summary = await api.selection(op);
@@ -277,6 +290,7 @@ async function refreshSummary(): Promise<void> {
 }
 
 function setSummary(summary: SelectionSummary): void {
+    view.rules = summary.rules.extensions;
     // Always show the denominator: "nothing selected" says nothing about how
     // much there is to choose from.
     const pool = `${count(summary.availableFiles)} files · ${bytes(summary.availableBytes)}`;
