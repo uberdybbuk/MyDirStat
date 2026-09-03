@@ -29,7 +29,20 @@ const view = {
 /** Resolves with the chosen ranks, or null if the dialog was dismissed. */
 let settle: ((ranks: number[] | null) => void) | null = null;
 
-export function initTypes(): void {
+/**
+ * Removing a whole file type is a different act from selecting one, so it is
+ * handed back to the app rather than folded into what the dialog returns:
+ * ticking a type must never be the thing that arms a delete.
+ */
+export interface TypeHandlers {
+    remove(mode: 'trash' | 'permanent', types: string[], files: number, bytes: number): void;
+}
+
+let handlers: TypeHandlers = { remove: () => undefined };
+
+export function initTypes(hooks: TypeHandlers): void {
+    handlers = hooks;
+
     el('typesClose').onclick = () => finish(null);
     el('typesCancel').onclick = () => finish(null);
     el('typesOk').onclick = () => finish([...view.chosen]);
@@ -68,6 +81,9 @@ export function initTypes(): void {
         };
     }
 
+    el('typesTrash').onclick = () => remove('trash');
+    el('typesErase').onclick = () => remove('permanent');
+
     el('typesRows').addEventListener('click', (e) => {
         const row = (e.target as HTMLElement).closest<HTMLElement>('[data-rank]');
         if (!row) return;
@@ -96,6 +112,23 @@ export async function openTypes(selected: readonly number[]): Promise<number[] |
     return new Promise((resolve) => {
         settle = resolve;
     });
+}
+
+/** Hand the ticked types to the app's delete flow and step out of the way. */
+function remove(mode: 'trash' | 'permanent'): void {
+    const picked = chosenRows();
+    if (picked.length === 0) return;
+    finish(null); // the delete is not a selection change
+    handlers.remove(
+        mode,
+        picked.map((r) => r.ext),
+        picked.reduce((a, r) => a + r.count, 0),
+        picked.reduce((a, r) => a + r.size, 0)
+    );
+}
+
+function chosenRows(): ExtensionRow[] {
+    return view.rows.filter((r) => view.chosen.has(r.rank));
 }
 
 function finish(ranks: number[] | null): void {
@@ -149,7 +182,7 @@ function render(): void {
         })
         .join('');
 
-    const picked = view.rows.filter((r) => view.chosen.has(r.rank));
+    const picked = chosenRows();
     const files = picked.reduce((a, r) => a + r.count, 0);
     const size = picked.reduce((a, r) => a + r.size, 0);
     el('typesTotals').textContent =
@@ -159,4 +192,9 @@ function render(): void {
               `${count(files)} files · ${bytes(size)}`;
     el('typesNote').textContent =
         view.filter === '' ? '' : `${count(rows.length)} of ${count(view.rows.length)} types shown`;
+
+    // Nothing ticked means nothing to remove.
+    for (const id of ['typesTrash', 'typesErase']) {
+        el<HTMLButtonElement>(id).disabled = picked.length === 0;
+    }
 }

@@ -29,7 +29,7 @@ import { basename } from 'node:path';
 import { F_DIR } from '../shared/protocol.js';
 import { ARCHIVE_FORMATS } from '../shared/protocol.js';
 import type {
-    ActionRequest, ArchiveFormat, BrowseResponse, DeleteMode, DeleteTarget, ExtensionRow, RootsResponse,
+    ActionRequest, ArchiveFormat, BrowseResponse, DeleteMode, DeleteRequest, DeleteTarget, ExtensionRow, RootsResponse,
     ScanProgress, ScanStatus, ScanSummary, SearchHit, SearchResponse,
     SelectionOp, SelectionSummary, SizeMetric, TreeRow,
 } from '../shared/protocol.js';
@@ -579,21 +579,31 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                     return send(res, 409, { error: 'A deletion is already running' });
                 }
 
-                const body = await readJson<{ mode?: DeleteMode; confirm?: number }>(req);
+                const body = await readJson<DeleteRequest>(req);
                 const mode: DeleteMode = body.mode === 'permanent' ? 'permanent' : 'trash';
-                const resolved = selection.resolve();
-                if (resolved.totalFiles === 0) return send(res, 400, { error: 'Nothing selected' });
+
+                // Two scopes: whatever is selected, or every file of the named
+                // types. The type dialog uses the second so that deleting a file
+                // type never depends on, or disturbs, the current selection.
+                const types = Array.isArray(body.types) ? body.types.filter((t) => typeof t === 'string') : null;
+                const picked = selection.resolve();
+                const scope = types
+                    ? selection.filesOfTypes(types)
+                    : { ids: Array.from(picked.ids), files: picked.totalFiles };
+                if (scope.files === 0) {
+                    return send(res, 400, { error: types ? 'No files of those types' : 'Nothing selected' });
+                }
 
                 // Permanent removal has no undo, so the client has to echo the
                 // exact count back. A stale dialog therefore cannot delete a
-                // selection the user never saw.
-                if (mode === 'permanent' && body.confirm !== resolved.totalFiles) {
+                // set the user never saw.
+                if (mode === 'permanent' && body.confirm !== scope.files) {
                     return send(res, 409, {
-                        error: `Confirmation does not match the selection (${resolved.totalFiles} files)`,
+                        error: `Confirmation does not match what would be deleted (${scope.files} files)`,
                     });
                 }
 
-                const targets: DeleteTarget[] = Array.from(resolved.ids, (id) => ({
+                const targets: DeleteTarget[] = Array.from(scope.ids, (id) => ({
                     id,
                     path: pathOf(store, id),
                     label: store.segments(id).join('/'),
@@ -616,8 +626,10 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 );
                 void deletion.done.then(() => {
                     settle(store);
-                    // The rules point at nodes that no longer exist.
-                    selection?.clear();
+                    // Deleting the selection consumes it — the rules now point at
+                    // nothing. Deleting a file type has nothing to do with what
+                    // the user had picked, so that is left alone.
+                    if (!types) selection?.clear();
                     broadcast('done', summary());
                 });
                 return send(res, 202, deletion.status());

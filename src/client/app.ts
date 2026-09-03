@@ -835,7 +835,21 @@ el('pickerZip').onclick = () => {
 };
 
 initPicker(applySelection);
-initTypes();
+initTypes({
+    // The type dialog has already closed itself; the picker goes too, since
+    // everything it is showing is about to be refetched.
+    remove: (mode, types, files, size) => {
+        if (mode === 'trash') {
+            closePicker();
+            void startDelete('trash', undefined, types);
+            return;
+        }
+        askPermanent(files, size, () => {
+            closePicker();
+            void startDelete('permanent', files, types);
+        });
+    },
+});
 
 /* ------------------------------------------------------------------ zip --- */
 
@@ -950,13 +964,46 @@ function renderDelete(status: DeleteStatus): void {
     el('delClose').hidden = running;
 }
 
-async function startDelete(mode: 'trash' | 'permanent', confirm?: number): Promise<void> {
+async function startDelete(
+    mode: 'trash' | 'permanent',
+    confirm?: number,
+    types?: string[]
+): Promise<void> {
     try {
-        renderDelete(await api.deleteSelection(mode, confirm));
+        renderDelete(await api.deleteSelection(mode, confirm, types));
     } catch (err) {
         reportError(err);
     }
 }
+
+/**
+ * Make the user type the count before anything is removed for good.
+ *
+ * Shared by both routes into permanent deletion — a selection, or whole file
+ * types — because the guarantee has to be the same either way: the number the
+ * user types is the number the server is then required to agree with.
+ */
+function askPermanent(files: number, size: number, go: () => void): void {
+    if (files === 0) return;
+    el('confirmBody').textContent =
+        `${count(files)} files (${bytes(size)}) will be removed for good. ` +
+        `They do not go to the Trash and cannot be recovered.`;
+    const input = el<HTMLInputElement>('confirmInput');
+    input.value = '';
+    const button = el<HTMLButtonElement>('confirmGo');
+    button.disabled = true;
+    input.oninput = () => {
+        const ok = input.value.trim() === String(files);
+        button.disabled = !ok;
+        input.classList.toggle('match', ok);
+    };
+    confirmed = go;
+    el('confirmDelete').hidden = false;
+    input.focus();
+}
+
+/** What the confirm dialog runs once the count has been typed correctly. */
+let confirmed: () => void = () => undefined;
 
 el('delCancel').onclick = () => void api.deleteCancel().catch(reportError);
 el('delClose').onclick = () => {
@@ -970,21 +1017,10 @@ el('pickerTrash').onclick = () => {
 
 el('pickerErase').onclick = () => {
     const total = state.selection?.files ?? 0;
-    if (total === 0) return;
-    el('confirmBody').textContent =
-        `${count(total)} files (${bytes(state.selection?.bytes ?? 0)}) will be removed for good. ` +
-        `They do not go to the Trash and cannot be recovered.`;
-    const input = el<HTMLInputElement>('confirmInput');
-    input.value = '';
-    const go = el<HTMLButtonElement>('confirmGo');
-    go.disabled = true;
-    input.oninput = () => {
-        const ok = input.value.trim() === String(total);
-        go.disabled = !ok;
-        input.classList.toggle('match', ok);
-    };
-    el('confirmDelete').hidden = false;
-    input.focus();
+    askPermanent(total, state.selection?.bytes ?? 0, () => {
+        closePicker();
+        void startDelete('permanent', total);
+    });
 };
 
 el('confirmCancel').onclick = () => {
@@ -992,8 +1028,7 @@ el('confirmCancel').onclick = () => {
 };
 el('confirmGo').onclick = () => {
     el('confirmDelete').hidden = true;
-    closePicker();
-    void startDelete('permanent', state.selection?.files ?? 0);
+    confirmed();
 };
 
 /* ------------------------------------------------------------ splitters --- */

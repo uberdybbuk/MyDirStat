@@ -289,6 +289,18 @@ export interface ZipStatus {
 /* ----------------------------------------------------------------- delete -- */
 
 export type DeleteMode = 'trash' | 'permanent';
+
+/**
+ * What to delete. With `types`, every file of those extensions anywhere in the
+ * scan; without it, whatever is currently selected. `confirm` carries the file
+ * count back for permanent removal and must match what the server counts.
+ */
+export interface DeleteRequest {
+    mode: DeleteMode;
+    confirm?: number;
+    types?: string[];
+}
+
 export type DeleteState = 'running' | 'done' | 'failed' | 'cancelled';
 
 export interface DeleteTarget {

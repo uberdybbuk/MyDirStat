@@ -98,8 +98,9 @@ export const api = {
     zipStatus: (id: string) => request<ZipStatus>(`/api/zip/status?id=${encodeURIComponent(id)}`),
     zipCancel: (id: string) => post<{ ok: true }>('/api/zip/cancel', { id }),
 
-    deleteSelection: (mode: 'trash' | 'permanent', confirm?: number) =>
-        post<DeleteStatus>('/api/delete', { mode, confirm }),
+    /** Without `types`, the current selection; with it, every file of those types. */
+    deleteSelection: (mode: 'trash' | 'permanent', confirm?: number, types?: string[]) =>
+        post<DeleteStatus>('/api/delete', { mode, confirm, types }),
     deleteCancel: () => post<{ ok: true }>('/api/delete/cancel', {}),
     /** Plain navigation, so the browser handles the save dialog itself. */
     zipDownloadUrl: (id: string) =>

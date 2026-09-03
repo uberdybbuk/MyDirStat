@@ -179,6 +179,37 @@ export class Selection {
         return this.availableCache;
     }
 
+    /**
+     * Every live file of the named types, whatever the selection happens to be.
+     *
+     * Deleting a whole file type is its own operation, not a selection: it must
+     * not sweep up what the user has ticked in the tree, and ticking a type must
+     * not be the thing that arms a delete. Types are addressed by name rather
+     * than by rank because ranks are assigned per scan — a name that no longer
+     * exists simply matches nothing, where a stale rank would match the wrong
+     * type.
+     */
+    filesOfTypes(names: readonly string[]): { ids: number[]; files: number; bytes: number } {
+        const store = this.store;
+        const wanted = new Set(names.map((n) => n.toLowerCase()));
+        const ranks = new Set<number>();
+        store.extNames.forEach((ext, rank) => {
+            if (wanted.has(ext)) ranks.add(rank);
+        });
+
+        const ids: number[] = [];
+        let bytes = 0;
+        if (ranks.size > 0) {
+            for (let i = 1; i < store.count; i++) {
+                if (store.flags[i] & (F_DIR | F_ERROR | F_SKIPPED | F_GONE)) continue;
+                if (!ranks.has(store.ext[i])) continue;
+                ids.push(i);
+                bytes += store.size[i];
+            }
+        }
+        return { ids, files: ids.length, bytes };
+    }
+
     /** Node ids are only meaningful for one scan, so a rescan starts over. */
     reset(): void {
         this.included.clear();
