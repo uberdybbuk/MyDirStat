@@ -119,6 +119,12 @@ async function loadTreemap(): Promise<void> {
     const seq = ++mapRequest;
     const data = await api.treemap(state.zoom, METRIC, mapArea(), MIN_TILE);
     if (seq !== mapRequest) return; // a newer request already won
+    // The server moves the zoom up out of anything that has been deleted, so
+    // the map never draws a folder that is no longer there. Follow it.
+    if (data.id !== state.zoom) {
+        state.zoom = data.id;
+        await renderCrumbs();
+    }
     map.setData(data.root);
     map.render();
     syncMapSelection();
@@ -882,20 +888,11 @@ async function runAction(op: 'reveal' | 'open' | 'trash' | 'delete', id: number)
     try {
         const result = await api.action(op, id);
         if (op === 'trash' || op === 'delete') {
-            // The node is gone server-side; drop our caches for it and repaint.
-            const parent = findParentOf(id);
-            state.rows.delete(id);
             pathCache.delete(id);
             state.selected = null;
-            if (parent !== null) {
-                state.kids.delete(parent);
-                await loadChildren(parent);
-            }
             setStatus(await api.state());
-            const root = await api.children(0);
-            state.rows.set(0, { ...root.self, n: root.path });
+            await refreshLoadedRows();
             await loadExtensions();
-            rebuildVisible();
             await loadTreemap();
         }
         el('statusPath').textContent = result.path;
@@ -904,9 +901,41 @@ async function runAction(op: 'reveal' | 'open' | 'trash' | 'delete', id: number)
     }
 }
 
-function findParentOf(id: number): number | null {
-    for (const [parent, kids] of state.kids) if (kids.includes(id)) return parent;
-    return null;
+/**
+ * Refetch every row on screen after something was removed.
+ *
+ * Removing one file changes the totals of every folder above it, so refreshing
+ * only its immediate parent left the intermediate ones showing pre-delete
+ * sizes — a folder could end up reported as larger than the tree containing it.
+ * The cache is dropped wholesale and rebuilt from what is actually expanded,
+ * which is bounded by what fits on screen.
+ */
+async function refreshLoadedRows(): Promise<void> {
+    const targets = [...new Set<number>([0, ...state.expanded])];
+    const pages = await Promise.all(
+        // A folder that was itself deleted answers 410; it drops out here and
+        // is pruned from the expanded set below.
+        targets.map((id) => api.children(id).then((page) => page, () => null))
+    );
+
+    state.rows.clear();
+    state.kids.clear();
+    // Nothing may look up a row between the clear and the rebuild.
+    state.visible = [];
+
+    pages.forEach((page, k) => {
+        const id = targets[k];
+        if (page === null) {
+            state.expanded.delete(id);
+            return;
+        }
+        if (id === 0) state.rows.set(0, { ...page.self, n: page.path });
+        else state.rows.set(id, page.self);
+        for (const row of page.rows) state.rows.set(row.i, row);
+        state.kids.set(id, page.rows.map((r) => r.i));
+    });
+
+    rebuildVisible();
 }
 
 /* ---------------------------------------------------------------- modal --- */

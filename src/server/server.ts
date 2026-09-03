@@ -18,7 +18,7 @@ import { gzipSync } from 'node:zlib';
 import { startScan, type ScanHandle, type ScanOptions } from './scanner.js';
 import { buildTreemap } from './treemap-query.js';
 import { colorForRank, extensionLabel, SPECIAL_COLORS } from './palette.js';
-import { NodeStore } from './store.js';
+import { NodeStore, F_GONE } from './store.js';
 import { iconForExtension, iconForFile, iconForFolder, iconFilePath } from './icons.js';
 import { toDisplayPath, toNativePath } from './paths.js';
 import { Selection, isPrecompressed } from './selection.js';
@@ -218,6 +218,11 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
         store.sib[id] = -1;
     }
 
+    /** Whether a node has been deleted since the scan. */
+    function gone(store: NodeStore, id: number): boolean {
+        return (store.flags[id] & F_GONE) !== 0;
+    }
+
     /** Re-derive every total, and drop the selection totals computed from them. */
     function settle(store: NodeStore): void {
         store.recompute();
@@ -413,6 +418,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 const id = nodeId();
                 if (!store) return send(res, 409, { error: 'No completed scan' });
                 if (id === null) return send(res, 400, { error: 'Bad node id' });
+                if (gone(store, id)) return send(res, 410, { error: 'That folder has been deleted' });
                 const rows: TreeRow[] = [];
                 for (const c of store.children(id)) rows.push(row(store, c));
                 return send(res, 200, { id, path: displayPathOf(store, id), self: row(store, id), rows }, {}, accept);
@@ -422,6 +428,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 const id = nodeId();
                 if (!store) return send(res, 409, { error: 'No completed scan' });
                 if (id === null) return send(res, 400, { error: 'Bad node id' });
+                if (gone(store, id)) return send(res, 410, { error: 'That item has been deleted' });
                 const chain: number[] = [];
                 for (let n = id; n !== -1; n = store.parent[n]) chain.push(n);
                 chain.reverse();
@@ -440,8 +447,14 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 // Scale the safety cap with the canvas so a large display gets the
                 // detail it can actually resolve.
                 const maxTiles = Math.round(Math.min(60000, Math.max(4000, area / 20)));
-                const result = buildTreemap(store, id, metric, { area, minTile, maxTiles });
-                return send(res, 200, { ...result, metric, id }, {}, accept);
+                // The zoomed-into folder can be deleted while the map is showing
+                // it. Drawing its remains is worse than moving: climb to the
+                // nearest folder that still exists and say which one that was, so
+                // the client can follow rather than sit on a ghost.
+                let at = id;
+                while (at > 0 && gone(store, at)) at = store.parent[at];
+                const result = buildTreemap(store, at < 0 ? 0 : at, metric, { area, minTile, maxTiles });
+                return send(res, 200, { ...result, metric, id: at < 0 ? 0 : at }, {}, accept);
             }
 
             case '/api/extensions': {
@@ -467,6 +480,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 const id = nodeId();
                 if (!store) return send(res, 409, { error: 'No completed scan' });
                 if (id === null) return send(res, 400, { error: 'Bad node id' });
+                if (gone(store, id)) return send(res, 410, { error: 'That item has been deleted' });
                 return send(res, 200, { ...row(store, id), path: displayPathOf(store, id) });
             }
 
