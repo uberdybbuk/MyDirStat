@@ -437,6 +437,7 @@ function setStatus(summary: ScanSummary): void {
             `<span class="dim">(${((summary.elapsedMs ?? 0) / 1000).toFixed(1)}s${summary.cancelled ? ', partial' : ''})</span>`;
     } else if (summary.status === 'error') {
         el('summary').textContent = summary.error ?? 'Scan failed';
+        showAlert(summary.error ?? 'Scan failed');
     }
 }
 
@@ -490,6 +491,7 @@ function connect(): void {
             { root: string; startedAt: number };
         el<HTMLInputElement>('path').value = root;
         setUrlPath(root);
+        clearAlert();
         startTicker(startedAt);
         setStatus({ status: 'scanning', root, startedAt });
         const empty = el('mapEmpty');
@@ -516,14 +518,30 @@ function connect(): void {
     });
 }
 
+/**
+ * Anything that went wrong, in a bar the user cannot walk past. Errors used to
+ * go to the status line, which the next hover overwrote.
+ */
+function showAlert(message: string): void {
+    el('alertText').textContent = message;
+    el('alert').hidden = false;
+}
+
+function clearAlert(): void {
+    el('alert').hidden = true;
+    el('alertText').textContent = '';
+}
+
 function reportError(err: unknown): void {
-    el('statusMeta').textContent = '';
-    el('statusPath').textContent = err instanceof Error ? err.message : String(err);
+    showAlert(err instanceof Error ? err.message : String(err));
 }
 
 /* -------------------------------------------------------------- toolbar --- */
 
+el('alertClose').onclick = clearAlert;
+
 el('scan').onclick = () => {
+    clearAlert();
     void api.scan(el<HTMLInputElement>('path').value.trim()).catch(reportError);
 };
 el('cancel').onclick = () => void api.cancel().catch(reportError);

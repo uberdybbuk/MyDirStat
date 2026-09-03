@@ -144,6 +144,30 @@ button.icon { padding: 5px 9px; }
 .summary { color: var(--text-dim); font-size: 12px; white-space: nowrap; }
 .summary b { color: var(--text); font-weight: 600; }
 
+/* --------------------------------------------------------------- alert --- */
+
+/*
+ * A failed scan has to be impossible to miss. This used to land in the status
+ * bar's path slot, where it was both easy to overlook and overwritten by the
+ * next mouse move over the treemap.
+ */
+.alert {
+    flex: none;
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px;
+    background: color-mix(in srgb, var(--danger) 14%, var(--bg-raised));
+    border-bottom: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+    color: var(--text);
+    font-size: 12px;
+}
+.alert-icon {
+    flex: none; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--danger); color: #fff;
+    font-weight: 700; font-size: 11px; line-height: 16px; text-align: center;
+}
+#alertText { flex: 1; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+.alert .icon { padding: 2px 8px; font-size: 15px; line-height: 1; background: none; border: none; }
+
 /* ------------------------------------------------------------ progress --- */
 
 .progress { flex: none; padding: 6px 10px; background: var(--bg-raised); border-bottom: 1px solid var(--border); }

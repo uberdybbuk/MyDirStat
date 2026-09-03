@@ -9,7 +9,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { promises as fs, existsSync, readdirSync, statSync } from 'node:fs';
+import { promises as fs, existsSync, opendirSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -392,9 +392,10 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
             case '/api/scan': {
                 if (req.method !== 'POST') return send(res, 405, { error: 'Use POST' });
                 const body = await readJson<{ path?: string; oneFileSystem?: boolean; countHardlinksOnce?: boolean }>(req);
-                if (!body.path) return send(res, 400, { error: 'path is required' });
+                if (!body.path) return send(res, 400, { error: 'Enter a directory to scan' });
                 const wanted = toNativePath(body.path);
-                if (!existsSync(wanted)) return send(res, 400, { error: `No such directory: ${body.path}` });
+                const problem = unreadable(wanted, body.path);
+                if (problem) return send(res, 400, { error: problem });
                 beginScan(wanted, {
                     oneFileSystem: body.oneFileSystem !== false,
                     countHardlinksOnce: body.countHardlinksOnce !== false,
@@ -707,6 +708,33 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
     }
 
     return { server, token, state, beginScan, summary };
+}
+
+/**
+ * Why a directory cannot be scanned, or null if it can.
+ *
+ * Checked before the worker starts so the answer comes back on the request the
+ * user made, rather than as an event they may not be watching. A directory that
+ * exists but cannot be listed is the case worth spending an `opendir` on: a
+ * plain existence check passes it, and the scan then completes "successfully"
+ * over an empty tree, which reads as "this folder is empty" rather than "you
+ * are not allowed to look".
+ */
+function unreadable(path: string, shown: string): string | null {
+    let dir;
+    try {
+        dir = opendirSync(path);
+    } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') return `No such directory: ${shown}`;
+        if (code === 'ENOTDIR') return `Not a directory: ${shown}`;
+        if (code === 'EACCES' || code === 'EPERM') return `Permission denied: ${shown}`;
+        if (code === 'ELOOP') return `Too many symbolic links: ${shown}`;
+        if (code === 'ENAMETOOLONG') return `Path is too long: ${shown}`;
+        return `Cannot open ${shown}${code ? ` (${code})` : ''}`;
+    }
+    dir.closeSync();
+    return null;
 }
 
 function parentOf(dir: string): string | null {

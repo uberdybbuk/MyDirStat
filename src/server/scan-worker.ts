@@ -86,20 +86,39 @@ function maybeReport(path: string): void {
     }
 }
 
-const rootStat = lstatSync(root, { throwIfNoEntry: false });
+/** Turn an errno into something a person can act on. */
+function why(err: unknown, path: string): string {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return `No such directory: ${path}`;
+    if (code === 'EACCES' || code === 'EPERM') return `Permission denied: ${path}`;
+    if (code === 'ENOTDIR') return `Not a directory: ${path}`;
+    if (code === 'ELOOP') return `Too many symbolic links: ${path}`;
+    if (code === 'ENAMETOOLONG') return `Path is too long: ${path}`;
+    return `Cannot read ${path}${code ? ` (${code})` : ''}`;
+}
 
-if (!rootStat) {
-    post({ type: 'error', message: `Cannot read ${root}` });
-} else if (!rootStat.isDirectory()) {
-    post({ type: 'error', message: `${root} is not a directory` });
+let rootStat: Stats | undefined;
+let rootError: string | null = null;
+try {
+    rootStat = lstatSync(root);
+} catch (err) {
+    rootError = why(err, root);
+}
+
+if (rootError !== null) {
+    post({ type: 'error', message: rootError });
+} else if (!rootStat!.isDirectory()) {
+    post({ type: 'error', message: `Not a directory: ${root}` });
 } else {
-    const rootDev = rootStat.dev;
+    const rootStats = rootStat!;
+    const rootDev = rootStats.dev;
     const rootIdx = store.add(-1, root, F_DIR);
-    store.alloc[rootIdx] = allocated(rootStat);
-    store.mtime[rootIdx] = rootStat.mtimeMs;
+    store.alloc[rootIdx] = allocated(rootStats);
+    store.mtime[rootIdx] = rootStats.mtimeMs;
 
     // Explicit stack; recursion would blow up on deep trees and is slower here.
     const stack: [number, string][] = [[rootIdx, root]];
+    let fatal: string | null = null;
 
     while (stack.length > 0) {
         if (cancelled) break;
@@ -110,7 +129,14 @@ if (!rootStat) {
         let entries;
         try {
             entries = readdirSync(dirPath, { withFileTypes: true });
-        } catch {
+        } catch (err) {
+            // An unreadable directory deep in the tree is a fact about that
+            // directory. An unreadable *root* is a failed scan: reporting it as
+            // a successful walk of nothing tells the user their folder is empty.
+            if (dirIdx === rootIdx) {
+                fatal = why(err, dirPath);
+                break;
+            }
             store.flags[dirIdx] |= F_ERROR;
             nErrors++;
             continue;
@@ -171,11 +197,15 @@ if (!rootStat) {
         }
     }
 
-    store.aggregate();
-    store.sortChildren();
-    store.summarise(extNames);
-    store.computeDominant();
+    if (fatal !== null) {
+        post({ type: 'error', message: fatal });
+    } else {
+        store.aggregate();
+        store.sortChildren();
+        store.summarise(extNames);
+        store.computeDominant();
 
-    const { payload, transfer } = store.toTransfer();
-    post({ type: 'done', cancelled, files: nFiles, dirs: nDirs, errors: nErrors, store: payload }, transfer);
+        const { payload, transfer } = store.toTransfer();
+        post({ type: 'done', cancelled, files: nFiles, dirs: nDirs, errors: nErrors, store: payload }, transfer);
+    }
 }
