@@ -92,10 +92,15 @@ export function initTypes(hooks: TypeHandlers): void {
         else view.chosen.add(rank);
         render();
     });
+}
 
-    el('types').addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') finish(null);
-    });
+export function isTypesOpen(): boolean {
+    return !el('types').hidden;
+}
+
+/** Dismiss without applying, as Cancel does. */
+export function closeTypes(): void {
+    finish(null);
 }
 
 export async function openTypes(selected: readonly number[]): Promise<number[] | null> {

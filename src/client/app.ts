@@ -5,7 +5,7 @@ import { api, requestedPath, setUrlPath } from './api.js';
 import { el, all, escapeHtml, hexToRgb } from './dom.js';
 import { bytes, count, percent, when } from './format.js';
 import { installColumnResizers, TREE_COLUMNS, EXT_COLUMNS } from './columns.js';
-import { initTypes } from './type-dialog.js';
+import { initTypes, isTypesOpen, closeTypes } from './type-dialog.js';
 import { initPicker, openPicker, closePicker, isOpen as isPickerOpen, selectedFormat } from './select-dialog.js';
 import { ARCHIVE_FORMATS, F_DIR, F_LINK, F_ERROR, F_SKIPPED, F_DUP } from '../shared/protocol.js';
 import type {
@@ -857,12 +857,34 @@ addEventListener('mousedown', (e) => {
     if (!menu.hidden && !menu.contains(e.target as Node)) closeMenu();
 });
 
+/**
+ * Dismissable layers, topmost first — the same order they stack in, since they
+ * share a z-index and are laid out by document order.
+ *
+ * Escape closes exactly one: the top one. Each dialog owning its own Escape
+ * handler is what let a single keypress close two of them — the type dialog
+ * dismissed itself, the event carried on to the window, and by then the picker
+ * underneath looked like the topmost thing open.
+ */
+const LAYERS: { open(): boolean; dismiss(): void }[] = [
+    { open: () => !el('modal').hidden, dismiss: () => el('modalCancel').click() },
+    // A job in progress is not dismissed by Escape; only its finished report is.
+    { open: () => !el('zipModal').hidden, dismiss: () => clickIfShown('zipClose') },
+    { open: () => !el('delModal').hidden, dismiss: () => clickIfShown('delClose') },
+    { open: () => !el('confirmDelete').hidden, dismiss: () => el('confirmCancel').click() },
+    { open: isTypesOpen, dismiss: closeTypes },
+    { open: isPickerOpen, dismiss: closePicker },
+];
+
+function clickIfShown(id: string): void {
+    const button = el(id);
+    if (!button.hidden) button.click();
+}
+
 addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     closeMenu();
-    if (!el('modal').hidden) el('modalCancel').click();
-    else if (!el('confirmDelete').hidden) el('confirmCancel').click();
-    else if (isPickerOpen()) closePicker();
+    LAYERS.find((layer) => layer.open())?.dismiss();
 });
 
 menu.addEventListener('click', (e) => {
