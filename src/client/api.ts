@@ -7,7 +7,7 @@
 
 import type {
     ActionOp, ActionResponse, AncestorsResponse, ChildrenResponse,
-    ExtensionsResponse, NodeDetail, RootsResponse, ScanSummary,
+    BrowseResponse, ExtensionsResponse, NodeDetail, RootsResponse, ScanSummary,
     SearchResponse, SelectionOp, SelectionSummary,
     DeleteStatus, SizeMetric, TreemapResponse, ZipStatus,
 } from '../shared/protocol.js';
@@ -78,6 +78,9 @@ const post = <T>(path: string, data: unknown): Promise<T> =>
 export const api = {
     state: () => request<ScanSummary>('/api/state'),
     roots: () => request<RootsResponse>('/api/roots'),
+    /** Subdirectories of `path`, for completing what is typed in the path box. */
+    browse: (path: string, hidden = false) =>
+        request<BrowseResponse>(`/api/browse?path=${encodePathParam(path)}${hidden ? '&hidden=1' : ''}`),
     children: (id: number) => request<ChildrenResponse>(`/api/children?id=${id}`),
     ancestors: (id: number) => request<AncestorsResponse>(`/api/ancestors?id=${id}`),
     node: (id: number) => request<NodeDetail>(`/api/node?id=${id}`),

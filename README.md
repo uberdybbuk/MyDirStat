@@ -23,6 +23,19 @@ Volumes are deduplicated by device id rather than by path, because macOS shows
 the startup disk at both `/` and `/Volumes/<name>` through a firmlink — matching
 on paths alone offers the same disk twice under two names.
 
+The path box completes as an Explorer address bar does. Type into it and the
+rest of the one folder that matches is written in and left *selected*, so
+carrying on typing replaces it and Enter accepts it — the suggestion is offered
+without ever being in the way. Underneath, the folders still matching are
+listed: the arrow keys walk them, Tab takes the highlighted one and opens it a
+level deeper without leaving the box, Escape puts the list away. Completion is
+offered forwards only. Appending while the user is deleting would mean the box
+refuses to shrink — backspace takes a character off, the completion puts it
+straight back — so a deletion never triggers one. Listings are cached per
+directory, so typing through a path costs one request per folder rather than one
+per keystroke, and hidden folders stay out of the way until the fragment being
+typed starts with a dot.
+
 - **Directory tree** — subtree sizes, share bars, item counts, modification dates,
   sortable on any column, expanded lazily, with Material file and folder icons.
   Drag a column edge to resize it, double-click the edge to reset it; widths

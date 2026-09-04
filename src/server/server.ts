@@ -381,10 +381,24 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
 
             case '/api/browse': {
                 const dir = toNativePath(url.searchParams.get('path') ?? homedir());
-                const entries = readdirSync(dir, { withFileTypes: true })
-                    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-                    .map((e) => ({ name: e.name, path: toDisplayPath(join(dir, e.name)) }))
-                    .sort((a, b) => a.name.localeCompare(b.name));
+                // Hidden folders are noise while typing, but a query that starts
+                // with a dot is asking for exactly them.
+                const hidden = url.searchParams.get('hidden') === '1';
+                let entries: BrowseResponse['entries'] = [];
+                try {
+                    entries = readdirSync(dir, { withFileTypes: true })
+                        .filter((e) => e.isDirectory() && (hidden || !e.name.startsWith('.')))
+                        .map((e) => ({
+                            name: e.name,
+                            path: toDisplayPath(join(dir, e.name)),
+                            icon: iconForFolder(e.name),
+                        }))
+                        .sort((a, b) => a.name.localeCompare(b.name));
+                } catch {
+                    // Typing a path means asking about directories that do not
+                    // exist yet, one keystroke at a time. No suggestions is the
+                    // right answer for those, not an error.
+                }
                 const parent = parentOf(dir);
                 const body: BrowseResponse = {
                     path: toDisplayPath(resolve(dir)),

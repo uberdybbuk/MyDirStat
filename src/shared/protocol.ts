@@ -145,7 +145,7 @@ export interface RootsResponse {
 export interface BrowseResponse {
     path: string;
     parent: string | null;
-    entries: { name: string; path: string }[];
+    entries: { name: string; path: string; icon: string }[];
 }
 
 /* ---------------------------------------------------------------- actions -- */

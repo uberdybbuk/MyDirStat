@@ -12,7 +12,8 @@
 
     <header class="toolbar">
         <button id="up" class="icon" title="Scan parent directory">&#x2191;</button>
-        <input id="path" class="path" spellcheck="false" autocomplete="off" placeholder="Directory to scan">
+        <input id="path" class="path" spellcheck="false" autocomplete="off" placeholder="Directory to scan"
+               role="combobox" aria-autocomplete="both" aria-expanded="false" aria-controls="pathList">
         <select id="roots" class="roots" title="Volumes"></select>
         <button id="scan" class="primary">Scan</button>
         <button id="cancel" class="danger" hidden>Stop</button>
@@ -28,6 +29,8 @@
         <span id="alertText"></span>
         <button id="alertClose" class="icon" title="Dismiss">&times;</button>
     </div>
+
+    <div id="pathList" class="path-list" role="listbox" hidden></div>
 
     <div id="progress" class="progress" hidden>
         <div class="bar"><i></i></div>

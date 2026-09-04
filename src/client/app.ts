@@ -6,6 +6,7 @@ import { el, all, escapeHtml, hexToRgb } from './dom.js';
 import { bytes, count, percent, when } from './format.js';
 import { installColumnResizers, TREE_COLUMNS, EXT_COLUMNS } from './columns.js';
 import { initTypes, isTypesOpen, closeTypes } from './type-dialog.js';
+import { initPathInput } from './path-input.js';
 import { initPicker, openPicker, closePicker, isOpen as isPickerOpen, selectedFormat } from './select-dialog.js';
 import { ARCHIVE_FORMATS, F_DIR, F_LINK, F_ERROR, F_SKIPPED, F_DUP } from '../shared/protocol.js';
 import type {
@@ -647,9 +648,7 @@ el('scan').onclick = () => {
     void api.scan(el<HTMLInputElement>('path').value.trim()).catch(reportError);
 };
 el('cancel').onclick = () => void api.cancel().catch(reportError);
-el<HTMLInputElement>('path').onkeydown = (e) => {
-    if (e.key === 'Enter') el('scan').click();
-};
+initPathInput(() => el('scan').click());
 el('up').onclick = () => {
     const current = el<HTMLInputElement>('path').value.trim();
     const parent = current.replace(/[\\/][^\\/]*[\\/]?$/, '') || '/';
