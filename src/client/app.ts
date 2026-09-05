@@ -5,9 +5,9 @@ import { api, requestedPath, setUrlPath } from './api.js';
 import { el, all, escapeHtml, hexToRgb } from './dom.js';
 import { bytes, count, percent, when } from './format.js';
 import { installColumnResizers, TREE_COLUMNS, EXT_COLUMNS } from './columns.js';
-import { initTypes, isTypesOpen, closeTypes } from './type-dialog.js';
+import { initTypes, closeTypes } from './type-dialog.js';
 import { initPathInput } from './path-input.js';
-import { initPicker, openPicker, closePicker, isOpen as isPickerOpen, selectedFormat } from './select-dialog.js';
+import { initPicker, openPicker, closePicker, selectedFormat } from './select-dialog.js';
 import { ARCHIVE_FORMATS, F_DIR, F_LINK, F_ERROR, F_SKIPPED, F_DUP } from '../shared/protocol.js';
 import type {
     ExtensionRow, NodeDetail, ScanProgress, ScanSummary,
@@ -114,9 +114,38 @@ function mapArea(): number {
     return Math.max(1, Math.round(rect.width * dpr * rect.height * dpr));
 }
 
+/* ----------------------------------------------------------- map on/off --- */
+
+const MAP_KEY = 'mydirstat.map';
+let mapShown = true;
+
+/**
+ * The map can be put away. It is the expensive half of the window — a fetch
+ * scaled to the canvas area, then a layout and a per-pixel shading pass on every
+ * resize — so hiding it stops that work rather than merely covering it up, and
+ * the tree gets the whole window for reading long paths.
+ */
+function showMap(on: boolean): void {
+    mapShown = on;
+    el('app').classList.toggle('no-map', !on);
+    const button = el('mapToggle');
+    button.setAttribute('aria-pressed', String(on));
+    button.title = on ? 'Hide the treemap' : 'Show the treemap';
+    try {
+        localStorage.setItem(MAP_KEY, on ? 'on' : 'off');
+    } catch {
+        /* private browsing: the choice still holds for this session */
+    }
+    renderTreeWindow();
+    if (on) {
+        map.resize();
+        void loadTreemap();
+    }
+}
+
 let mapRequest = 0;
 async function loadTreemap(): Promise<void> {
-    if (state.status !== 'ready') return;
+    if (state.status !== 'ready' || !mapShown) return;
     const seq = ++mapRequest;
     const data = await api.treemap(state.zoom, METRIC, mapArea(), MIN_TILE);
     if (seq !== mapRequest) return; // a newer request already won
@@ -865,25 +894,116 @@ addEventListener('mousedown', (e) => {
  * dismissed itself, the event carried on to the window, and by then the picker
  * underneath looked like the topmost thing open.
  */
-const LAYERS: { open(): boolean; dismiss(): void }[] = [
-    { open: () => !el('modal').hidden, dismiss: () => el('modalCancel').click() },
+interface Layer {
+    /** Element wrapping the whole dialog, so focus can be kept inside it. */
+    id: string;
+    dismiss(): void;
+    /** Buttons the Delete key stands in for, plain and shifted. */
+    remove?: [string, string];
+}
+
+const LAYERS: Layer[] = [
+    { id: 'modal', dismiss: () => el('modalCancel').click() },
     // A job in progress is not dismissed by Escape; only its finished report is.
-    { open: () => !el('zipModal').hidden, dismiss: () => clickIfShown('zipClose') },
-    { open: () => !el('delModal').hidden, dismiss: () => clickIfShown('delClose') },
-    { open: () => !el('confirmDelete').hidden, dismiss: () => el('confirmCancel').click() },
-    { open: isTypesOpen, dismiss: closeTypes },
-    { open: isPickerOpen, dismiss: closePicker },
+    { id: 'zipModal', dismiss: () => clickIfShown('zipClose') },
+    { id: 'delModal', dismiss: () => clickIfShown('delClose') },
+    { id: 'confirmDelete', dismiss: () => el('confirmCancel').click() },
+    { id: 'types', dismiss: closeTypes, remove: ['typesTrash', 'typesErase'] },
+    { id: 'picker', dismiss: closePicker, remove: ['pickerTrash', 'pickerErase'] },
 ];
+
+/** The dialog on top, or nothing when the window itself has the keyboard. */
+function topLayer(): Layer | undefined {
+    return LAYERS.find((layer) => !el(layer.id).hidden);
+}
 
 function clickIfShown(id: string): void {
     const button = el(id);
     if (!button.hidden) button.click();
 }
 
+const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Tab stays inside the dialog on top.
+ *
+ * A modal that lets Tab wander off into the window behind it is a trap of its
+ * own: the focus ring disappears into a tree the dialog is covering, and the
+ * next Enter presses something nobody can see. Disabled and hidden controls are
+ * skipped, so the confirm dialog cycles between its box and Cancel until the
+ * count typed in matches and the delete button joins the ring.
+ */
+function trapTab(e: KeyboardEvent): void {
+    const layer = topLayer();
+    if (!layer) return;
+    const stops = [...el(layer.id).querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+        (node) =>
+            !node.hidden &&
+            !(node as HTMLButtonElement).disabled &&
+            // Row twisties opt out of the tab order with tabindex="-1"; a plain
+            // `button` selector would otherwise put every one of them in the ring.
+            node.getAttribute('tabindex') !== '-1' &&
+            node.getClientRects().length > 0
+    );
+    if (stops.length === 0) return;
+
+    e.preventDefault();
+    const at = stops.indexOf(document.activeElement as HTMLElement);
+    const step = e.shiftKey ? -1 : 1;
+    const next = at < 0 ? (e.shiftKey ? stops.length - 1 : 0) : (at + step + stops.length) % stops.length;
+    stops[next].focus();
+}
+
+/**
+ * Delete on a Windows keyboard, Cmd+Backspace on a Mac one. Plain sends the
+ * target to the Trash, as both desktops do; Shift removes it for good, which is
+ * Explorer's own convention and still goes through the confirmation.
+ */
+function isRemoveKey(e: KeyboardEvent): boolean {
+    if (e.key === 'Delete') return !e.altKey && !e.ctrlKey && !e.metaKey;
+    return e.key === 'Backspace' && e.metaKey && !e.altKey && !e.ctrlKey;
+}
+
+/** Typing somewhere: the key belongs to the text, not to the selection. */
+function inField(target: EventTarget | null): boolean {
+    const node = target as HTMLElement | null;
+    if (!node) return false;
+    return /^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName) || node.isContentEditable;
+}
+
+function removeSelected(permanent: boolean): void {
+    const id = state.selected;
+    if (id === null) return;
+    if (id === 0) {
+        showAlert('The scan root itself cannot be deleted from here.');
+        return;
+    }
+    if (!permanent) {
+        void runAction('trash', id);
+        return;
+    }
+    void api.node(id).then((node) => confirmDelete(node, () => void runAction('delete', id)));
+}
+
 addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    closeMenu();
-    LAYERS.find((layer) => layer.open())?.dismiss();
+    if (e.key === 'Tab') return trapTab(e);
+
+    if (e.key === 'Escape') {
+        closeMenu();
+        topLayer()?.dismiss();
+        return;
+    }
+
+    if (isRemoveKey(e) && !inField(e.target)) {
+        const layer = topLayer();
+        // A confirmation or a running job owns the keyboard; only the dialogs
+        // that have something to delete answer for the key.
+        if (layer && !layer.remove) return;
+        e.preventDefault();
+        closeMenu();
+        if (layer) el(layer.remove![e.shiftKey ? 1 : 0]).click();
+        else removeSelected(e.shiftKey);
+    }
 });
 
 menu.addEventListener('click', (e) => {
@@ -1221,6 +1341,7 @@ draggable(el('splitH'), (e) => {
 
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 new ResizeObserver(() => {
+    if (!mapShown) return;
     map.resize();
     map.layout();
     map.paint();
@@ -1254,6 +1375,13 @@ void api.roots().then(({ roots, showPicker, home }) => {
     const pathInput = el<HTMLInputElement>('path');
     if (!pathInput.value) pathInput.value = home;
 });
+
+el('mapToggle').onclick = () => showMap(!mapShown);
+try {
+    if (localStorage.getItem(MAP_KEY) === 'off') showMap(false);
+} catch {
+    /* unreadable storage: the map stays visible */
+}
 
 installColumnResizers(el('treePane'), TREE_COLUMNS, 'mydirstat.columns.tree');
 installColumnResizers(el('extPane'), EXT_COLUMNS, 'mydirstat.columns.ext');

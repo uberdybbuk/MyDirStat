@@ -46,10 +46,6 @@ const view = {
 
 let onChanged: (summary: SelectionSummary) => void = () => undefined;
 
-export function isOpen(): boolean {
-    return !el('picker').hidden;
-}
-
 export function initPicker(changed: (summary: SelectionSummary) => void): void {
     onChanged = changed;
     watchSize();

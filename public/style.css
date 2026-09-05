@@ -232,6 +232,19 @@ button.icon { padding: 5px 9px; }
 
 main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .row.top { display: flex; min-height: 0; height: 46%; }
+
+/* With the map hidden the panes take the whole window, and the height the
+   splitter was dragged to is ignored rather than lost — showing it again
+   restores it. */
+#app.no-map .row.top { height: auto !important; flex: 1; }
+#app.no-map #splitH, #app.no-map #mapPane { display: none; }
+
+/* The app's own mark, in one colour: four tiles are what a treemap looks like,
+   where any single filled glyph reads as a stop button. */
+button.glyph { display: inline-flex; align-items: center; padding: 5px 8px; }
+button.glyph svg { width: 14px; height: 14px; display: block; fill: currentColor; }
+#mapToggle { color: var(--accent); }
+#mapToggle[aria-pressed="false"] { color: var(--text-faint); }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
 #treePane {
     flex: 1 1 auto;

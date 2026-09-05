@@ -94,10 +94,6 @@ export function initTypes(hooks: TypeHandlers): void {
     });
 }
 
-export function isTypesOpen(): boolean {
-    return !el('types').hidden;
-}
-
 /** Dismiss without applying, as Cancel does. */
 export function closeTypes(): void {
     finish(null);

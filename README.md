@@ -55,6 +55,26 @@ typed starts with a dot.
 
 Selection is linked across all three panes in both directions.
 
+The map can be put away with the toolbar's tile button — the same four-rectangle
+mark the app uses as its icon, since any single filled glyph reads as a stop
+button — which gives the tree the whole window and is remembered between runs. Hiding it stops the work rather
+than covering it up: no tile fetch, no layout, no per-pixel shading pass on
+resize — which is the expensive half of the window on a large scan.
+
+**Delete** removes whatever is selected — in the tree, on the map, or in the
+selection dialog — to the Trash, and **Shift+Delete** removes it for good,
+matching Explorer. On a Mac keyboard ⌘+Backspace does the same. Both go through
+the confirmations they would from a menu, permanent removal still asks for the
+file count, and the key does nothing while the caret is in a text box, where it
+belongs to the text. The scan root is refused rather than silently ignored.
+
+Tab stays inside whatever dialog is on top. A modal that lets Tab wander into
+the window behind it is a trap of its own: the focus ring disappears into
+something the dialog is covering, and the next Enter presses a control nobody
+can see. Disabled and hidden controls are skipped, so the permanent-delete
+dialog cycles between its box and Cancel until the count typed in matches and
+the delete button joins the ring.
+
 The address bar carries the scanned folder, so a reload restores the same view
 and the URL is meaningful to look at:
 
