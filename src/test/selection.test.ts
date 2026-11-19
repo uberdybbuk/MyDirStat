@@ -395,3 +395,17 @@ test('a restored NuGet package is taken whole, a monorepo packages/ folder is no
         'App.dll': '.dll',
     });
 });
+
+test('a restored package whose .nupkg is already gone is still recognised by name and layout', () => {
+    const store = buildStore({
+        packages: {
+            'EntityFramework.6.4.4': { content: { 'App.config.transform': 3 }, tools: { 'init.ps1': 2 } },
+            'jQuery.3.6.0-beta1': { Content: { Scripts: { 'jquery.js': 90 } } },
+            // Versioned name but no package layout, and a layout with no version.
+            'Notes.1.0': { 'readme.txt': 1 },
+            ui: { lib: { 'index.ts': 5 } },
+        },
+    });
+    const found = new Selection(store).filesOfTypes(['nuget:packages']);
+    assert.deepEqual(found.ids.map((i) => store.name(i)).sort(), ['App.config.transform', 'init.ps1', 'jquery.js']);
+});

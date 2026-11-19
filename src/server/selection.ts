@@ -74,6 +74,10 @@ const WILDCARD = /[*?]/;
 const FOLDER_RULE = /^([^/*?]+)\/\*(\.[^/*?]+)$/;
 /** `nuget:packages`: everything in a restored NuGet package under `packages/`. */
 const PACKAGE_RULE = 'nuget:';
+/** `Newtonsoft.Json.12.0.3`, `Foo.2.1.0-beta1`: how packages.config names a restored package. */
+const VERSIONED_FOLDER = /^[A-Za-z_][\w.-]*?\.\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.-]+)?$/;
+/** Folders only a NuGet package has at its top level. */
+const PACKAGE_LAYOUT = new Set(['lib', 'content', 'contentfiles', 'tools', 'build', 'buildtransitive', 'runtimes', 'analyzers', 'ref']);
 /**
  * `*.cs` and friends: the shape nearly every preset is made of. One extension
  * segment only — `*.min.js` has to go the general route, since the extension of
@@ -297,9 +301,12 @@ export class Selection {
      * Nodes inside a restored NuGet package, 1 per node.
      *
      * packages.config restores each package to `<packages>/<Id>.<Version>/`,
-     * with the .nupkg itself directly in that folder. Requiring the .nupkg is
-     * what keeps a JavaScript monorepo's `packages/` source folders out of it:
-     * the folder name alone says nothing.
+     * with the .nupkg itself directly in that folder. A folder there counts as
+     * a package when it holds a .nupkg, or, for one whose .nupkg is already
+     * gone, when it is named `Id.1.2.3` and has a package's own layout (lib/,
+     * content/, tools/, build/…). Either test keeps a JavaScript monorepo's
+     * `packages/ui` source folders out of it: the folder name alone says
+     * nothing.
      */
     private packageMembers(folder: string): Uint8Array {
         const store = this.store;
@@ -313,17 +320,25 @@ export class Selection {
             }
         }
 
+        const hasLayout = new Uint8Array(store.count);
+        for (let i = 1; i < store.count; i++) {
+            if ((store.flags[i] & F_DIR) && PACKAGE_LAYOUT.has(store.name(i).toLowerCase())) {
+                hasLayout[store.parent[i]] = 1;
+            }
+        }
+
         const nameOf = (d: number): string =>
             (d === 0 ? basename(store.root) : store.name(d)).toLowerCase();
+        const isPackage = (d: number): boolean =>
+            d > 0 &&
+            nameOf(store.parent[d]) === folder &&
+            (holdsPackage[d] === 1 || (hasLayout[d] === 1 && VERSIONED_FOLDER.test(store.name(d))));
+
         const member = new Uint8Array(store.count);
         for (let i = 1; i < store.count; i++) {
             const p = store.parent[i];
             if (p < 0) continue;
-            if (member[p] === 1) {
-                member[i] = 1;
-            } else if (holdsPackage[p] === 1 && p > 0 && nameOf(store.parent[p]) === folder) {
-                member[i] = 1;
-            }
+            if (member[p] === 1 || isPackage(p)) member[i] = 1;
         }
         return member;
     }
