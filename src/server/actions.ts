@@ -25,8 +25,14 @@ export async function reveal(path: string): Promise<void> {
     if (process.platform === 'darwin') {
         await run('open', ['-R', path]);
     } else if (process.platform === 'win32') {
+        // explorer only understands `/select,"C:\a b\c"`. Node's default
+        // quoting wraps the whole argument instead (`"/select,C:\a b\c"`),
+        // which explorer ignores and opens Documents, so any path with a space
+        // failed. Verbatim arguments let us place the quotes ourselves. Windows
+        // paths cannot contain `"`, so nothing inside can close the quote early.
         // explorer exits non-zero even on success, so its status is not a signal.
-        await run('explorer', [`/select,${path}`]).catch(() => undefined);
+        await run('explorer', [`/select,"${path}"`], { windowsVerbatimArguments: true })
+            .catch(() => undefined);
     } else {
         try {
             await run('dbus-send', [
