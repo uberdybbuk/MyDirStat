@@ -98,6 +98,7 @@
     <button data-op="reveal">Show in file manager</button>
     <button data-op="open">Open</button>
     <hr>
+    <button data-op="shrink" class="danger">Shrink&hellip;</button>
     <button data-op="trash" class="danger">Move to Trash</button>
     <button data-op="delete" class="danger">Delete permanently&hellip;</button>
 </div>
@@ -172,6 +173,41 @@
             <button id="typesErase" class="danger">Delete permanently&hellip;</button>
             <button id="typesCancel">Cancel</button>
             <button id="typesOk" class="primary">OK</button>
+        </div>
+    </div>
+</div>
+
+<div id="shrink" class="modal" hidden>
+    <div class="sheet wide types-sheet" id="shrinkSheet">
+        <header class="review-head">
+            <h2>Shrink</h2>
+            <span id="shrinkTotals" class="dim"></span>
+            <button id="shrinkClose" class="icon" title="Close">&times;</button>
+        </header>
+
+        <p class="shrink-intro dim">
+            Build output, packages, archives, images, fonts, Flash, web service references and bundled libraries in <code>dist/</code> folders under
+            <code id="shrinkPath"></code>
+            will be removed. Generated web service proxies (<code>Reference.cs</code> and <code>wsdl.exe</code> output) are not removed but
+            rewritten to an interface of their operations and data types. Untick any type you want to keep.
+        </p>
+
+        <div class="pane-head type-grid">
+            <span class="col-type">Type</span>
+            <span class="col-num">Size</span>
+            <span class="col-pct">Share</span>
+            <span class="col-num">Files</span>
+        </div>
+        <div class="scroll picker-scroll" id="shrinkScroll">
+            <div class="rows" id="shrinkRows"></div>
+        </div>
+
+        <div class="sheet-actions">
+            <span id="shrinkNote" class="dim"></span>
+            <span class="spacer"></span>
+            <button id="shrinkTrash" class="danger">Move to Trash</button>
+            <button id="shrinkErase" class="danger">Delete permanently&hellip;</button>
+            <button id="shrinkCancel">Cancel</button>
         </div>
     </div>
 </div>

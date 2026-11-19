@@ -6,6 +6,7 @@ import { el, all, escapeHtml, hexToRgb } from './dom.js';
 import { bytes, count, percent, when } from './format.js';
 import { installColumnResizers, TREE_COLUMNS, EXT_COLUMNS } from './columns.js';
 import { initTypes, closeTypes } from './type-dialog.js';
+import { initShrink, openShrink, closeShrink } from './shrink-dialog.js';
 import { initPathInput } from './path-input.js';
 import { initPicker, openPicker, closePicker, selectedFormat } from './select-dialog.js';
 import { ARCHIVE_FORMATS, F_DIR, F_LINK, F_ERROR, F_SKIPPED, F_DUP } from '../shared/protocol.js';
@@ -853,7 +854,9 @@ const menu = el('menu');
 function openMenu(x: number, y: number, id: number): void {
     state.menuTarget = id;
     const row = state.rows.get(id);
-    menu.querySelector<HTMLButtonElement>('[data-op="zoom"]')!.disabled = !(row && row.flags & F_DIR);
+    const isDir = !!(row && row.flags & F_DIR);
+    menu.querySelector<HTMLButtonElement>('[data-op="zoom"]')!.disabled = !isDir;
+    menu.querySelector<HTMLButtonElement>('[data-op="shrink"]')!.disabled = !isDir;
     menu.hidden = false;
     const box = menu.getBoundingClientRect();
     menu.style.left = `${Math.min(x, innerWidth - box.width - 6)}px`;
@@ -909,6 +912,7 @@ const LAYERS: Layer[] = [
     { id: 'delModal', dismiss: () => clickIfShown('delClose') },
     { id: 'confirmDelete', dismiss: () => el('confirmCancel').click() },
     { id: 'types', dismiss: closeTypes, remove: ['typesTrash', 'typesErase'] },
+    { id: 'shrink', dismiss: closeShrink, remove: ['shrinkTrash', 'shrinkErase'] },
     { id: 'picker', dismiss: closePicker, remove: ['pickerTrash', 'pickerErase'] },
 ];
 
@@ -1018,6 +1022,10 @@ menu.addEventListener('click', (e) => {
         void zoomTo(id);
         return;
     }
+    if (op === 'shrink') {
+        void openShrink(id).catch(reportError);
+        return;
+    }
     if (op === 'delete') {
         void api.node(id).then((node) => confirmDelete(node, () => void runAction('delete', id)));
         return;
@@ -1124,6 +1132,16 @@ initTypes({
             closePicker();
             void startDelete('permanent', files, types);
         });
+    },
+});
+
+initShrink({
+    remove: (mode, under, types, files, size) => {
+        if (mode === 'trash') {
+            void startDelete('trash', undefined, types, under);
+            return;
+        }
+        askPermanent(files, size, () => void startDelete('permanent', files, types, under));
     },
 });
 
@@ -1243,10 +1261,11 @@ function renderDelete(status: DeleteStatus): void {
 async function startDelete(
     mode: 'trash' | 'permanent',
     confirm?: number,
-    types?: string[]
+    types?: string[],
+    under?: number
 ): Promise<void> {
     try {
-        renderDelete(await api.deleteSelection(mode, confirm, types));
+        renderDelete(await api.deleteSelection(mode, confirm, types, under));
     } catch (err) {
         reportError(err);
     }

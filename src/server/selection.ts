@@ -70,6 +70,8 @@ interface FilterTerm {
 }
 
 const WILDCARD = /[*?]/;
+/** `dist/*.js`: an extension, but only beneath a folder with that name. */
+const FOLDER_RULE = /^([^/*?]+)\/\*(\.[^/*?]+)$/;
 /**
  * `*.cs` and friends: the shape nearly every preset is made of. One extension
  * segment only — `*.min.js` has to go the general route, since the extension of
@@ -188,26 +190,96 @@ export class Selection {
      * than by rank because ranks are assigned per scan — a name that no longer
      * exists simply matches nothing, where a stale rank would match the wrong
      * type.
+     *
+     * Each entry is one of three kinds, all matched case-insensitively:
+     *
+     *     .ext          an extension ("" for no extension)
+     *     thumbs.db     an exact file name, so it can be taken without every .db
+     *     dist/*.js     an extension, only beneath a folder of that name
+     *
+     * `keys` runs parallel to `ids` and says which entry took each file, so a
+     * caller can report per entry. An extension or name wins over a folder rule.
+     *
+     * `under` limits it to one subtree. Since `parent[i] < i`, a single forward
+     * pass decides membership: a node is inside when its parent is.
      */
-    filesOfTypes(names: readonly string[]): { ids: number[]; files: number; bytes: number } {
+    filesOfTypes(
+        names: readonly string[],
+        under = 0
+    ): { ids: number[]; keys: string[]; files: number; bytes: number } {
         const store = this.store;
         const wanted = new Set(names.map((n) => n.toLowerCase()));
+
+        const fileNames = new Set<string>();
+        // folder name -> extension -> the entry that asked for it
+        const folderRules = new Map<string, Map<string, string>>();
+        for (const entry of wanted) {
+            const rule = FOLDER_RULE.exec(entry);
+            if (rule) {
+                const exts = folderRules.get(rule[1]) ?? new Map<string, string>();
+                exts.set(rule[2], entry);
+                folderRules.set(rule[1], exts);
+            } else if (entry !== '' && !entry.startsWith('.')) {
+                fileNames.add(entry);
+            }
+        }
         const ranks = new Set<number>();
         store.extNames.forEach((ext, rank) => {
             if (wanted.has(ext)) ranks.add(rank);
         });
 
-        const ids: number[] = [];
-        let bytes = 0;
-        if (ranks.size > 0) {
+        let inside: Uint8Array | null = null;
+        if (under > 0) {
+            inside = new Uint8Array(store.count);
+            inside[under] = 1;
+            for (let i = under + 1; i < store.count; i++) {
+                const p = store.parent[i];
+                if (p >= 0 && inside[p] === 1) inside[i] = 1;
+            }
+        }
+
+        // The nearest ancestor folder carrying a rule, per node. Directory
+        // names only; files never get a name lookup here.
+        let ruleFolder: Int32Array | null = null;
+        const folderNames: string[] = [...folderRules.keys()];
+        if (folderNames.length > 0) {
+            ruleFolder = new Int32Array(store.count).fill(-1);
             for (let i = 1; i < store.count; i++) {
+                const p = store.parent[i];
+                if (p < 0) continue;
+                ruleFolder[i] = ruleFolder[p];
+                // The root's "name" is its whole path, so it never names a rule.
+                if (p > 0) {
+                    const k = folderNames.indexOf(store.name(p).toLowerCase());
+                    if (k >= 0) ruleFolder[i] = k;
+                }
+            }
+        }
+
+        const ids: number[] = [];
+        const keys: string[] = [];
+        let bytes = 0;
+        if (ranks.size > 0 || fileNames.size > 0 || ruleFolder) {
+            for (let i = Math.max(1, under); i < store.count; i++) {
+                if (inside && inside[i] === 0) continue;
                 if (store.flags[i] & (F_DIR | F_ERROR | F_SKIPPED | F_GONE)) continue;
-                if (!ranks.has(store.ext[i])) continue;
+                const ext = store.extNames[store.ext[i]] ?? '';
+                let key: string | undefined;
+                if (fileNames.size > 0) {
+                    const lower = store.name(i).toLowerCase();
+                    if (fileNames.has(lower)) key = lower;
+                }
+                if (key === undefined && ranks.has(store.ext[i])) key = ext;
+                if (key === undefined && ruleFolder && ruleFolder[i] >= 0) {
+                    key = folderRules.get(folderNames[ruleFolder[i]])!.get(ext);
+                }
+                if (key === undefined) continue;
                 ids.push(i);
+                keys.push(key);
                 bytes += store.size[i];
             }
         }
-        return { ids, files: ids.length, bytes };
+        return { ids, keys, files: ids.length, bytes };
     }
 
     /** Node ids are only meaningful for one scan, so a rescan starts over. */

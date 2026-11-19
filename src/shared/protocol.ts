@@ -301,6 +301,26 @@ export interface DeleteRequest {
     mode: DeleteMode;
     confirm?: number;
     types?: string[];
+    /** With `types`: only files beneath this node, as Shrink does. */
+    under?: number;
+}
+
+/** One file type Shrink would remove from a folder. */
+export interface ShrinkType {
+    ext: string;
+    label: string;
+    group: string;
+    icon: string;
+    color: string;
+    count: number;
+    size: number;
+}
+
+/** What Shrink found under a folder, shown before anything is removed. */
+export interface ShrinkPreview {
+    id: number;
+    path: string;
+    types: ShrinkType[];
 }
 
 export type DeleteState = 'running' | 'done' | 'failed' | 'cancelled';
@@ -309,7 +329,10 @@ export interface DeleteTarget {
     id: number;
     path: string;
     label: string;
+    /** Bytes the target frees: its size, or what minimizing it saves. */
     size: number;
+    /** Rewrite the file smaller instead of removing it (Shrink's proxies). */
+    minimize?: boolean;
 }
 
 export interface DeleteFailure {

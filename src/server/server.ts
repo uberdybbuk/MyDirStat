@@ -24,6 +24,8 @@ import { toDisplayPath, toNativePath } from './paths.js';
 import { Selection, isPrecompressed } from './selection.js';
 import { ArchiveManager, type ArchiveEntry } from './archive.js';
 import { DeleteJob } from './delete-job.js';
+import { MINIMIZE_PROXIES, PROXY_GROUP, SHRINK_TYPES, shrinkGroupOf } from './shrink.js';
+import { looksLikeProxy, minimizeReferenceFile, SNIFF_BYTES } from './web-reference.js';
 import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
 import { F_DIR } from '../shared/protocol.js';
@@ -31,7 +33,7 @@ import { ARCHIVE_FORMATS } from '../shared/protocol.js';
 import type {
     ActionRequest, ArchiveFormat, BrowseResponse, DeleteMode, DeleteRequest, DeleteTarget, ExtensionRow, RootsResponse,
     ScanProgress, ScanStatus, ScanSummary, SearchHit, SearchResponse,
-    SelectionOp, SelectionSummary, SizeMetric, TreeRow,
+    SelectionOp, SelectionSummary, ShrinkPreview, ShrinkType, SizeMetric, TreeRow,
 } from '../shared/protocol.js';
 import * as actions from './actions.js';
 
@@ -221,6 +223,47 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
     /** Whether a node has been deleted since the scan. */
     function gone(store: NodeStore, id: number): boolean {
         return (store.flags[id] & F_GONE) !== 0;
+    }
+
+    /**
+     * Generated ASMX proxies under `under`, each with what minimizing it would
+     * save. They are found by content, not by name: Visual Studio calls them
+     * Reference.cs, wsdl.exe names them after the service.
+     *
+     * Every .cs file has its first few KB read, a handful at a time, and only
+     * the ones that look like a proxy are read whole and parsed. A file that
+     * cannot be read or parsed is simply not offered.
+     */
+    async function findProxies(store: NodeStore, under: number, skip: ReadonlySet<number>): Promise<DeleteTarget[]> {
+        const ids = selection!.filesOfTypes(['.cs'], under).ids.filter((id) => !skip.has(id));
+        const found: (DeleteTarget | null)[] = new Array(ids.length).fill(null);
+
+        const inspect = async (k: number): Promise<void> => {
+            const id = ids[k];
+            const path = pathOf(store, id);
+            try {
+                if (!looksLikeProxy(await readHead(path, SNIFF_BYTES))) return;
+                const bytes = await fs.readFile(path);
+                const after = minimizeReferenceFile(bytes);
+                if (!after || after.length >= bytes.length) return;
+                found[k] = {
+                    id,
+                    path,
+                    label: store.segments(id).join('/'),
+                    size: bytes.length - after.length,
+                    minimize: true,
+                };
+            } catch {
+                /* unreadable or not parseable: leave it out */
+            }
+        };
+
+        let next = 0;
+        const worker = async (): Promise<void> => {
+            while (next < ids.length) await inspect(next++);
+        };
+        await Promise.all(Array.from({ length: Math.min(16, ids.length) }, worker));
+        return found.filter((t): t is DeleteTarget => t !== null);
     }
 
     /** Re-derive every total, and drop the selection totals computed from them. */
@@ -498,6 +541,58 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 return send(res, 200, { ...row(store, id), path: displayPathOf(store, id) });
             }
 
+            case '/api/shrink': {
+                const id = nodeId();
+                if (!store || !selection) return send(res, 409, { error: 'No completed scan' });
+                if (id === null) return send(res, 400, { error: 'Bad node id' });
+                if (gone(store, id)) return send(res, 410, { error: 'That item has been deleted' });
+
+                const found = selection.filesOfTypes(SHRINK_TYPES, id);
+                // One row per entry the request will carry back: an extension,
+                // a file name like Thumbs.db, or a folder rule like dist/*.js.
+                const rows = new Map<string, ShrinkType>();
+                found.ids.forEach((i, k) => {
+                    const key = found.keys[k];
+                    const name = store.name(i);
+                    const rank = store.ext[i];
+                    const ext = store.extNames[rank];
+                    let row = rows.get(key);
+                    if (!row) {
+                        const isExt = key === ext;
+                        const isFolder = key.includes('/');
+                        row = {
+                            ext: key,
+                            label: isExt ? extensionLabel(key) : isFolder ? key : name,
+                            group: shrinkGroupOf(key),
+                            icon: isExt || isFolder ? iconForExtension(ext) : iconForFile(name),
+                            color: colorForRank(rank),
+                            count: 0,
+                            size: 0,
+                        };
+                        rows.set(key, row);
+                    }
+                    row.count += 1;
+                    row.size += store.size[i];
+                });
+                const types = [...rows.values()].sort((a, b) => b.size - a.size);
+
+                const proxies = await findProxies(store, id, new Set(found.ids));
+                if (proxies.length > 0) {
+                    const rank = store.ext[proxies[0].id];
+                    types.push({
+                        ext: MINIMIZE_PROXIES,
+                        label: 'Generated proxy → interface',
+                        group: PROXY_GROUP,
+                        icon: iconForExtension('.cs'),
+                        color: colorForRank(rank),
+                        count: proxies.length,
+                        size: proxies.reduce((a, t) => a + t.size, 0),
+                    });
+                }
+                const body: ShrinkPreview = { id, path: displayPathOf(store, id), types };
+                return send(res, 200, body, {}, accept);
+            }
+
             case '/api/selection': {
                 if (!store || !selection) return send(res, 409, { error: 'No completed scan' });
 
@@ -623,10 +718,19 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 // types. The type dialog uses the second so that deleting a file
                 // type never depends on, or disturbs, the current selection.
                 const types = Array.isArray(body.types) ? body.types.filter((t) => typeof t === 'string') : null;
+                // Shrink narrows a type delete to one folder.
+                const under = body.under ?? 0;
+                if (!Number.isInteger(under) || under < 0 || under >= store.count || gone(store, under)) {
+                    return send(res, 400, { error: 'Bad folder id' });
+                }
                 const picked = selection.resolve();
-                const scope = types
-                    ? selection.filesOfTypes(types)
+                const minimize = types?.includes(MINIMIZE_PROXIES) ?? false;
+                const plainTypes = types?.filter((t) => t !== MINIMIZE_PROXIES) ?? null;
+                const removed = plainTypes
+                    ? selection.filesOfTypes(plainTypes, under)
                     : { ids: Array.from(picked.ids), files: picked.totalFiles };
+                const rewrites = minimize ? await findProxies(store, under, new Set(removed.ids)) : [];
+                const scope = { ids: removed.ids, files: removed.files + rewrites.length };
                 if (scope.files === 0) {
                     return send(res, 400, { error: types ? 'No files of those types' : 'Nothing selected' });
                 }
@@ -646,6 +750,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                     label: store.segments(id).join('/'),
                     size: store.size[id],
                 }));
+                targets.push(...rewrites);
                 // Never act outside the tree that was actually scanned.
                 for (const target of targets) {
                     if (!actions.isInside(store.root, target.path)) {
@@ -658,7 +763,7 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 deletion = new DeleteJob(
                     targets,
                     mode,
-                    (id) => unlink(store, id),
+                    (id, newSize) => (newSize === undefined ? unlink(store, id) : store.resize(id, newSize)),
                     (job) => broadcast('delete', job.status())
                 );
                 void deletion.done.then(() => {
@@ -839,4 +944,18 @@ function listRoots(): { label: string; path: string }[] {
         }
     }
     return roots;
+}
+
+/** The first `limit` bytes of a file, decoded as UTF-8 (UTF-16 if it says so). */
+async function readHead(path: string, limit: number): Promise<string> {
+    const handle = await fs.open(path, 'r');
+    try {
+        const buffer = Buffer.alloc(limit);
+        const { bytesRead } = await handle.read(buffer, 0, limit, 0);
+        const head = buffer.subarray(0, bytesRead);
+        if (head[0] === 0xff && head[1] === 0xfe) return head.subarray(2).toString('utf16le');
+        return head.toString('utf8');
+    } finally {
+        await handle.close();
+    }
 }

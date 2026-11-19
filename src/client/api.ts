@@ -8,7 +8,7 @@
 import type {
     ActionOp, ActionResponse, AncestorsResponse, ChildrenResponse,
     BrowseResponse, ExtensionsResponse, NodeDetail, RootsResponse, ScanSummary,
-    SearchResponse, SelectionOp, SelectionSummary,
+    SearchResponse, SelectionOp, SelectionSummary, ShrinkPreview,
     DeleteStatus, SizeMetric, TreemapResponse, ZipStatus,
 } from '../shared/protocol.js';
 
@@ -102,8 +102,10 @@ export const api = {
     zipCancel: (id: string) => post<{ ok: true }>('/api/zip/cancel', { id }),
 
     /** Without `types`, the current selection; with it, every file of those types. */
-    deleteSelection: (mode: 'trash' | 'permanent', confirm?: number, types?: string[]) =>
-        post<DeleteStatus>('/api/delete', { mode, confirm, types }),
+    deleteSelection: (mode: 'trash' | 'permanent', confirm?: number, types?: string[], under?: number) =>
+        post<DeleteStatus>('/api/delete', { mode, confirm, types, under }),
+    /** Development leftovers under a folder, by type, before Shrink removes them. */
+    shrink: (id: number) => request<ShrinkPreview>(`/api/shrink?id=${id}`),
     deleteCancel: () => post<{ ok: true }>('/api/delete/cancel', {}),
     /** Plain navigation, so the browser handles the save dialog itself. */
     zipDownloadUrl: (id: string) =>

@@ -242,6 +242,18 @@ export class NodeStore {
     }
 
     /**
+     * A file was rewritten in place (Shrink minimizing a proxy). Takes effect
+     * at the next `recompute()`, like a removal does. Allocation is rounded to
+     * 4 KiB clusters, the common default, since the real figure needs a stat
+     * the caller has no reason to make.
+     */
+    resize(id: number, bytes: number): void {
+        this.captureOwn();
+        this.size[id] = bytes;
+        this.ownAlloc![id] = Math.ceil(bytes / 4096) * 4096;
+    }
+
+    /**
      * Rebuild every total from the nodes still attached to the root.
      *
      * Deletion used to patch the totals in place, subtracting each removed node

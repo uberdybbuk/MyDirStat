@@ -318,3 +318,56 @@ test('clear removes every rule', () => {
     assert.equal(sel.resolve().totalFiles, 0);
     assert.deepEqual(sel.ruleCounts, { included: 0, excluded: 0, extensions: [] });
 });
+
+test('a type delete limited to one folder leaves the same types elsewhere alone', () => {
+    const store = buildStore({
+        app: { bin: { 'App.exe': 10, 'App.dll': 20, 'App.pdb': 5 }, 'Program.cs': 3, 'logo.png': 7 },
+        other: { 'Tool.exe': 40, 'shot.png': 9 },
+        'root.dll': 1,
+    });
+    const sel = new Selection(store);
+    const types = ['.exe', '.dll', '.pdb', '.png'];
+
+    const scoped = sel.filesOfTypes(types, at(store, 'app'));
+    const names = scoped.ids.map((i) => store.name(i)).sort();
+    assert.deepEqual(names, ['App.dll', 'App.exe', 'App.pdb', 'logo.png']);
+    assert.equal(scoped.bytes, 42);
+
+    // Without a folder it is still the whole scan.
+    assert.equal(sel.filesOfTypes(types).files, 7);
+});
+
+test('a file name entry takes that file only, not its whole extension', () => {
+    const store = buildStore({
+        img: { 'Thumbs.db': 4, 'cache.db': 50 },
+        'thumbs.DB': 2,
+        'notes.txt': 1,
+    });
+    const sel = new Selection(store);
+    const found = sel.filesOfTypes(['thumbs.db']);
+    assert.deepEqual(found.ids.map((i) => store.name(i)).sort(), ['Thumbs.db', 'thumbs.DB']);
+    // "No extension" is still an extension entry, not a file name.
+    assert.equal(sel.filesOfTypes(['']).files, 0);
+});
+
+test('a folder rule takes that extension only beneath folders of that name', () => {
+    const store = buildStore({
+        web: {
+            Scripts: { 'app.js': 5 },
+            wwwroot: { lib: { jquery: { dist: { 'jquery.min.js': 90, 'jquery.min.map': 40, css: { 'x.css': 3 } } } } },
+            'Dist.js': 1,
+        },
+        DIST: { 'bundle.js': 20, 'logo.png': 8 },
+    });
+    const sel = new Selection(store);
+    const found = sel.filesOfTypes(['dist/*.js', 'dist/*.map', 'dist/*.css', '.png']);
+    const byName = Object.fromEntries(found.ids.map((i, k) => [store.name(i), found.keys[k]]));
+    assert.deepEqual(byName, {
+        'jquery.min.js': 'dist/*.js',
+        'jquery.min.map': 'dist/*.map',
+        'x.css': 'dist/*.css',
+        'bundle.js': 'dist/*.js',
+        // A plain extension entry wins over the folder rule.
+        'logo.png': '.png',
+    });
+});

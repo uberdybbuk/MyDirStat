@@ -20,6 +20,7 @@ import { promisify } from 'node:util';
 import { basename, dirname, join, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import type { DeleteFailure, DeleteMode, DeleteState, DeleteStatus, DeleteTarget } from '../shared/protocol.js';
+import { minimizeReferenceFile } from './web-reference.js';
 
 const run = promisify(execFile);
 
@@ -46,7 +47,8 @@ export class DeleteJob {
     constructor(
         private readonly targets: DeleteTarget[],
         readonly mode: DeleteMode,
-        private readonly onDeleted: (id: number) => void,
+        /** `newSize` is set when the file was rewritten smaller rather than removed. */
+        private readonly onDeleted: (id: number, newSize?: number) => void,
         private readonly onProgress: (job: DeleteJob) => void
     ) {
         this.bytesTotal = targets.reduce((a, t) => a + t.size, 0);
@@ -101,7 +103,12 @@ export class DeleteJob {
         return this.mode === 'permanent' || process.platform === 'linux' ? 1 : BATCH;
     }
 
-    private async removeChunk(chunk: DeleteTarget[]): Promise<void> {
+    private async removeChunk(targets: DeleteTarget[]): Promise<void> {
+        const rewrites = targets.filter((t) => t.minimize);
+        if (rewrites.length > 0) await this.rewriteChunk(rewrites);
+        const chunk = targets.filter((t) => !t.minimize);
+        if (chunk.length === 0) return;
+
         const reasons = new Map<number, string>();
         const attempt = async (target: DeleteTarget, remove: () => Promise<unknown>): Promise<void> => {
             this.currentPath = target.label;
@@ -152,6 +159,79 @@ export class DeleteJob {
             });
             this.filesDone++;
         });
+    }
+
+    /**
+     * Replace each file with its minimized form.
+     *
+     * In trash mode the originals go to the trash first, as one batch, and the
+     * new text is written only where the original is confirmed gone. A write
+     * that fails after that leaves the original in the trash, recoverable,
+     * rather than lost. Permanent mode writes a sibling temp file and renames
+     * it over the original, so a failure never leaves a half-written file.
+     */
+    private async rewriteChunk(chunk: DeleteTarget[]): Promise<void> {
+        const ready: { target: DeleteTarget; before: number; after: Buffer }[] = [];
+        for (const target of chunk) {
+            this.currentPath = target.label;
+            try {
+                const bytes = await fs.readFile(target.path);
+                const after = minimizeReferenceFile(bytes);
+                if (after) ready.push({ target, before: bytes.length, after });
+                else this.fail(target, 'no longer a web reference proxy');
+            } catch (err) {
+                this.fail(target, (err as Error).message.split('\n')[0]);
+            }
+        }
+        if (ready.length === 0) return;
+
+        if (this.mode === 'trash') {
+            try {
+                await trashBatch(ready.map((r) => r.target.path));
+            } catch {
+                for (const r of ready) await trashBatch([r.target.path]).catch(() => undefined);
+            }
+        }
+
+        for (const { target, before, after } of ready) {
+            this.currentPath = target.label;
+            try {
+                if (this.mode === 'trash') {
+                    if (await stillThere(target.path)) {
+                        this.fail(target, 'could not be moved to the Trash');
+                        continue;
+                    }
+                    await fs.writeFile(target.path, after, { flag: 'wx' });
+                } else {
+                    const temp = `${target.path}.mydirstat-${randomBytes(4).toString('hex')}`;
+                    await fs.writeFile(temp, after, { flag: 'wx' });
+                    // Source control often leaves files read-only, and a rename
+                    // over a read-only file fails on Windows.
+                    await fs.chmod(target.path, 0o666).catch(() => undefined);
+                    try {
+                        await fs.rename(temp, target.path);
+                    } catch (err) {
+                        await fs.rm(temp, { force: true });
+                        throw err;
+                    }
+                }
+                const written = (await fs.stat(target.path)).size;
+                if (written !== after.length) {
+                    this.fail(target, 'rewritten file has an unexpected size');
+                    continue;
+                }
+                this.filesDone++;
+                this.bytesFreed += before - written;
+                this.onDeleted(target.id, written);
+            } catch (err) {
+                this.fail(target, (err as Error).message.split('\n')[0]);
+            }
+        }
+    }
+
+    private fail(target: DeleteTarget, reason: string): void {
+        this.failures.push({ path: target.label, reason });
+        this.filesDone++;
     }
 
     private accountFor(target: DeleteTarget): void {

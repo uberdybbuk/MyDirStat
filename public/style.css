@@ -528,6 +528,21 @@ button.glyph svg { width: 14px; height: 14px; display: block; fill: currentColor
 #typesRows .erow { height: 24px; cursor: pointer; }
 #typesRows .name { padding-left: 8px; }
 
+/* Shrink reuses the type table; its rows are ticked off rather than picked. */
+.shrink-intro { margin: 10px 0 10px; line-height: 1.5; }
+.shrink-intro code { word-break: break-all; }
+/* A short list, so it flows normally instead of being windowed. */
+#shrinkRows { position: static; }
+#shrinkRows .erow { height: 24px; cursor: pointer; }
+#shrinkRows .name { padding-left: 8px; }
+#shrinkRows .group {
+    height: 22px; line-height: 22px; padding: 0 8px; margin-top: 4px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--text-dim);
+}
+#shrinkRows .group:first-child { margin-top: 0; }
+#shrinkRows .empty { padding: 24px 8px; text-align: center; color: var(--text-dim); }
+
 /* Every failed removal, named. A count alone would leave the user to guess
    which files are still on disk. */
 .failures {
