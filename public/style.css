@@ -541,6 +541,10 @@ button.glyph svg { width: 14px; height: 14px; display: block; fill: currentColor
     color: var(--text-dim);
 }
 #shrinkRows .group:first-child { margin-top: 0; }
+.shrink-loading { padding: 40px 24px; text-align: center; }
+.modal .shrink-loading .bar { max-width: 360px; margin: 12px auto; }
+.shrink-loading p { margin: 0; }
+.shrink-modes { margin: 10px 0 0; font-size: 12px; line-height: 1.5; }
 #shrinkRows .empty { padding: 24px 8px; text-align: center; color: var(--text-dim); }
 
 /* Every failed removal, named. A count alone would leave the user to guess

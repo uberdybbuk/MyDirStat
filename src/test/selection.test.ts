@@ -371,3 +371,27 @@ test('a folder rule takes that extension only beneath folders of that name', () 
         'logo.png': '.png',
     });
 });
+
+test('a restored NuGet package is taken whole, a monorepo packages/ folder is not', () => {
+    const store = buildStore({
+        packages: {
+            'Newtonsoft.Json.12.0.3': {
+                'Newtonsoft.Json.12.0.3.nupkg': 500,
+                lib: { net45: { 'Newtonsoft.Json.dll': 700, 'Newtonsoft.Json.xml': 300 } },
+            },
+            'repositories.config': 1,
+        },
+        web: { packages: { ui: { 'index.ts': 5, 'package.json': 1 } } },
+        bin: { 'App.dll': 9 },
+    });
+    const sel = new Selection(store);
+    const found = sel.filesOfTypes(['nuget:packages', '.dll', '.nupkg']);
+    const byName = Object.fromEntries(found.ids.map((i, k) => [store.name(i), found.keys[k]]));
+    assert.deepEqual(byName, {
+        'Newtonsoft.Json.12.0.3.nupkg': 'nuget:packages',
+        'Newtonsoft.Json.dll': 'nuget:packages',
+        'Newtonsoft.Json.xml': 'nuget:packages',
+        // Outside a package, the plain extension entry still applies.
+        'App.dll': '.dll',
+    });
+});

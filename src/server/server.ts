@@ -33,7 +33,7 @@ import { ARCHIVE_FORMATS } from '../shared/protocol.js';
 import type {
     ActionRequest, ArchiveFormat, BrowseResponse, DeleteMode, DeleteRequest, DeleteTarget, ExtensionRow, RootsResponse,
     ScanProgress, ScanStatus, ScanSummary, SearchHit, SearchResponse,
-    SelectionOp, SelectionSummary, ShrinkPreview, ShrinkType, SizeMetric, TreeRow,
+    SelectionOp, SelectionSummary, ShrinkPreview, ShrinkProgress, ShrinkType, SizeMetric, TreeRow,
 } from '../shared/protocol.js';
 import * as actions from './actions.js';
 
@@ -91,6 +91,15 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
 
     const zips = new ArchiveManager((job) => broadcast('zip', job.status()));
     let deletion: DeleteJob | null = null;
+
+    /** The Shrink preview in progress; a newer one or Cancel stops it. */
+    let shrinkLook: { cancelled: boolean } | null = null;
+    /**
+     * Proxies the last preview found, so pressing Shrink does not read every
+     * .cs file a second time. Each one is re-read and re-checked by the job
+     * anyway, so a file that changed in between fails safely.
+     */
+    let shrinkCache: { scanId: number; under: number; proxies: DeleteTarget[] } | null = null;
 
     function broadcast(event: string, data: unknown): void {
         const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -234,9 +243,18 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
      * the ones that look like a proxy are read whole and parsed. A file that
      * cannot be read or parsed is simply not offered.
      */
-    async function findProxies(store: NodeStore, under: number, skip: ReadonlySet<number>): Promise<DeleteTarget[]> {
+    async function findProxies(
+        store: NodeStore,
+        under: number,
+        skip: ReadonlySet<number>,
+        look: { cancelled: boolean } = { cancelled: false },
+        onProgress: (done: number, total: number, found: number) => void = () => undefined
+    ): Promise<DeleteTarget[]> {
         const ids = selection!.filesOfTypes(['.cs'], under).ids.filter((id) => !skip.has(id));
         const found: (DeleteTarget | null)[] = new Array(ids.length).fill(null);
+        let done = 0;
+        let hits = 0;
+        let reported = 0;
 
         const inspect = async (k: number): Promise<void> => {
             const id = ids[k];
@@ -253,14 +271,25 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                     size: bytes.length - after.length,
                     minimize: true,
                 };
+                hits += 1;
             } catch {
                 /* unreadable or not parseable: leave it out */
             }
         };
 
+        onProgress(0, ids.length, 0);
         let next = 0;
         const worker = async (): Promise<void> => {
-            while (next < ids.length) await inspect(next++);
+            while (next < ids.length && !look.cancelled) {
+                await inspect(next++);
+                done += 1;
+                // A few updates a second is plenty for a progress bar.
+                const now = Date.now();
+                if (now - reported > 150) {
+                    reported = now;
+                    onProgress(done, ids.length, hits);
+                }
+            }
         };
         await Promise.all(Array.from({ length: Math.min(16, ids.length) }, worker));
         return found.filter((t): t is DeleteTarget => t !== null);
@@ -560,11 +589,14 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                     if (!row) {
                         const isExt = key === ext;
                         const isFolder = key.includes('/');
+                        const isPackage = key.startsWith('nuget:');
                         row = {
                             ext: key,
-                            label: isExt ? extensionLabel(key) : isFolder ? key : name,
+                            label: isPackage ? `${key.slice('nuget:'.length)}/ (restored packages)`
+                                : isExt ? extensionLabel(key) : isFolder ? key : name,
                             group: shrinkGroupOf(key),
-                            icon: isExt || isFolder ? iconForExtension(ext) : iconForFile(name),
+                            icon: isPackage ? iconForFolder('packages')
+                                : isExt || isFolder ? iconForExtension(ext) : iconForFile(name),
                             color: colorForRank(rank),
                             count: 0,
                             size: 0,
@@ -576,7 +608,15 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 });
                 const types = [...rows.values()].sort((a, b) => b.size - a.size);
 
-                const proxies = await findProxies(store, id, new Set(found.ids));
+                if (shrinkLook) shrinkLook.cancelled = true;
+                const look = { cancelled: false };
+                shrinkLook = look;
+                const proxies = await findProxies(store, id, new Set(found.ids), look, (done, total, hits) =>
+                    broadcast('shrink', { id, done, total, found: hits } satisfies ShrinkProgress)
+                );
+                if (shrinkLook === look) shrinkLook = null;
+                if (look.cancelled) return send(res, 409, { error: 'Cancelled' });
+                shrinkCache = { scanId: state.scanId, under: id, proxies };
                 if (proxies.length > 0) {
                     const rank = store.ext[proxies[0].id];
                     types.push({
@@ -591,6 +631,12 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 }
                 const body: ShrinkPreview = { id, path: displayPathOf(store, id), types };
                 return send(res, 200, body, {}, accept);
+            }
+
+            case '/api/shrink/cancel': {
+                if (req.method !== 'POST') return send(res, 405, { error: 'Use POST' });
+                if (shrinkLook) shrinkLook.cancelled = true;
+                return send(res, 200, { ok: true });
             }
 
             case '/api/selection': {
@@ -726,10 +772,28 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                 const picked = selection.resolve();
                 const minimize = types?.includes(MINIMIZE_PROXIES) ?? false;
                 const plainTypes = types?.filter((t) => t !== MINIMIZE_PROXIES) ?? null;
-                const removed = plainTypes
-                    ? selection.filesOfTypes(plainTypes, under)
-                    : { ids: Array.from(picked.ids), files: picked.totalFiles };
-                const rewrites = minimize ? await findProxies(store, under, new Set(removed.ids)) : [];
+                // Shrink: a file can fit several entries (a .dll inside a NuGet
+                // package), and the preview showed it under exactly one. Match
+                // against everything Shrink offers and keep the files whose
+                // entry was ticked, so unticking a row keeps every file it
+                // showed, rather than letting another entry take them anyway.
+                const shrinking = plainTypes !== null && body.under !== undefined;
+                const offered = shrinking ? selection.filesOfTypes(SHRINK_TYPES, under) : null;
+                const chosen = new Set(plainTypes ?? []);
+                const removed = offered
+                    ? (() => {
+                        const ids = offered.ids.filter((_, k) => chosen.has(offered.keys[k]));
+                        return { ids, files: ids.length };
+                    })()
+                    : plainTypes
+                        ? selection.filesOfTypes(plainTypes, under)
+                        : { ids: Array.from(picked.ids), files: picked.totalFiles };
+                const skip = new Set(offered ? offered.ids : removed.ids);
+                const cached = shrinkCache && shrinkCache.scanId === state.scanId && shrinkCache.under === under
+                    ? shrinkCache.proxies.filter((t) => !skip.has(t.id) && !gone(store, t.id))
+                    : null;
+                const rewrites = minimize ? cached ?? await findProxies(store, under, skip) : [];
+                if (minimize) shrinkCache = null;
                 const scope = { ids: removed.ids, files: removed.files + rewrites.length };
                 if (scope.files === 0) {
                     return send(res, 400, { error: types ? 'No files of those types' : 'Nothing selected' });
@@ -764,7 +828,8 @@ export function createApp({ oneFileSystem = true }: AppOptions = {}): App {
                     targets,
                     mode,
                     (id, newSize) => (newSize === undefined ? unlink(store, id) : store.resize(id, newSize)),
-                    (job) => broadcast('delete', job.status())
+                    (job) => broadcast('delete', job.status()),
+                    types && body.under !== undefined ? 'shrink' : 'delete'
                 );
                 void deletion.done.then(() => {
                     settle(store);

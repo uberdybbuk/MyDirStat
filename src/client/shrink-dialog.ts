@@ -3,14 +3,18 @@
  *
  * The server says which development leftovers live under the folder, one row
  * per type with its size and count. Every type starts ticked. Unticking one
- * keeps it. Nothing is removed until one of the two delete buttons is pressed,
- * and the permanent one still goes through the app's typed-count confirmation.
+ * keeps it. Nothing changes on disk until Shrink is pressed, and the permanent
+ * variant still goes through the app's typed-count confirmation.
+ *
+ * Finding generated proxies means reading the start of every .cs file, which
+ * takes a while on a large tree. The dialog opens at once and shows that
+ * search's progress, so a slow folder never looks like a click that did nothing.
  */
 
 import { api } from './api.js';
 import { el, escapeHtml } from './dom.js';
 import { bytes, count, percent } from './format.js';
-import type { ShrinkPreview, ShrinkType } from '../shared/protocol.js';
+import type { ShrinkPreview, ShrinkProgress, ShrinkType } from '../shared/protocol.js';
 
 export interface ShrinkHandlers {
     remove(mode: 'trash' | 'permanent', under: number, types: string[], files: number, bytes: number): void;
@@ -18,6 +22,8 @@ export interface ShrinkHandlers {
 
 const view = {
     preview: null as ShrinkPreview | null,
+    /** The folder being looked at; set while loading too, so progress can be matched to it. */
+    loadingId: null as number | null,
     kept: new Set<string>(),
 };
 
@@ -42,18 +48,60 @@ export function initShrink(hooks: ShrinkHandlers): void {
 }
 
 export function closeShrink(): void {
+    // Closing while the server is still reading files stops it reading.
+    if (view.loadingId !== null) void api.shrinkCancel().catch(() => undefined);
     el('shrink').hidden = true;
     view.preview = null;
+    view.loadingId = null;
 }
 
 export async function openShrink(id: number): Promise<void> {
-    const preview = await api.shrink(id);
-    view.preview = preview;
+    view.preview = null;
+    view.loadingId = id;
     view.kept = new Set();
-    el('shrinkPath').textContent = preview.path;
+    el('shrinkPath').textContent = '';
+    void api.node(id).then((node) => {
+        if (view.loadingId === id) el('shrinkPath').textContent = node.path;
+    }, () => undefined);
+    showLoading('Looking for files to shrink…', 0, '');
     el('shrink').hidden = false;
     render();
     el('shrinkCancel').focus();
+
+    let preview: ShrinkPreview;
+    try {
+        preview = await api.shrink(id);
+    } catch (err) {
+        // Cancelled or replaced by a newer look: nothing to report.
+        if (view.loadingId !== id) return;
+        view.loadingId = null;
+        closeShrink();
+        throw err;
+    }
+    if (view.loadingId !== id) return;
+    view.loadingId = null;
+    view.preview = preview;
+    el('shrinkPath').textContent = preview.path;
+    el('shrinkLoading').hidden = true;
+    render();
+}
+
+/** Progress of the server's look through the .cs files, from the event stream. */
+export function shrinkProgress(p: ShrinkProgress): void {
+    if (view.loadingId !== p.id || p.total === 0) return;
+    const proxies = p.found === 1 ? '1 generated proxy' : `${count(p.found)} generated proxies`;
+    showLoading(
+        'Looking for generated web service proxies…',
+        p.done / p.total,
+        `${count(p.done)} of ${count(p.total)} .cs files read · ${proxies} found`
+    );
+}
+
+function showLoading(text: string, fraction: number, detail: string): void {
+    el('shrinkLoading').hidden = false;
+    el('shrinkLoadingText').textContent = text;
+    el<HTMLElement>('shrinkLoadingBar').style.width = `${Math.round(fraction * 100)}%`;
+    el('shrinkLoadingDetail').textContent = detail;
 }
 
 function chosen(): ShrinkType[] {
@@ -89,9 +137,11 @@ function render(): void {
         (a, b) => b[1].reduce((s, t) => s + t.size, 0) - a[1].reduce((s, t) => s + t.size, 0)
     );
 
-    el('shrinkRows').innerHTML =
-        types.length === 0
-            ? '<div class="empty">Nothing to remove here.</div>'
+    const loading = view.preview === null;
+    el('shrinkRows').innerHTML = loading
+        ? ''
+        : types.length === 0
+            ? '<div class="empty">Nothing to shrink here.</div>'
             : ordered
                   .map(([group, list]) =>
                       `<div class="group">${escapeHtml(group)}</div>` +
@@ -102,8 +152,9 @@ function render(): void {
     const picked = chosen();
     const files = picked.reduce((a, t) => a + t.count, 0);
     const size = picked.reduce((a, t) => a + t.size, 0);
-    el('shrinkTotals').textContent =
-        picked.length === 0 ? 'Nothing chosen' : `${count(files)} files · ${bytes(size)}`;
+    el('shrinkTotals').textContent = loading
+        ? ''
+        : picked.length === 0 ? 'Nothing chosen' : `${count(files)} files · ${bytes(size)} saved`;
     el('shrinkNote').textContent =
         view.kept.size === 0 ? '' : `${count(view.kept.size)} ${view.kept.size === 1 ? 'type' : 'types'} kept`;
 

@@ -35,6 +35,7 @@ export class DeleteJob {
 
     state: DeleteState = 'running';
     filesDone = 0;
+    rewritten = 0;
     bytesFreed = 0;
     currentPath = '';
     finishedAt?: number;
@@ -49,7 +50,8 @@ export class DeleteJob {
         readonly mode: DeleteMode,
         /** `newSize` is set when the file was rewritten smaller rather than removed. */
         private readonly onDeleted: (id: number, newSize?: number) => void,
-        private readonly onProgress: (job: DeleteJob) => void
+        private readonly onProgress: (job: DeleteJob) => void,
+        readonly purpose: 'delete' | 'shrink' = 'delete'
     ) {
         this.bytesTotal = targets.reduce((a, t) => a + t.size, 0);
         this.done = this.run();
@@ -60,6 +62,8 @@ export class DeleteJob {
             id: this.id,
             state: this.state,
             mode: this.mode,
+            purpose: this.purpose,
+            rewritten: this.rewritten,
             files: this.targets.length,
             filesDone: this.filesDone,
             bytesFreed: this.bytesFreed,
@@ -173,6 +177,7 @@ export class DeleteJob {
     private async rewriteChunk(chunk: DeleteTarget[]): Promise<void> {
         const ready: { target: DeleteTarget; before: number; after: Buffer }[] = [];
         for (const target of chunk) {
+            if (this.cancelled) break;
             this.currentPath = target.label;
             try {
                 const bytes = await fs.readFile(target.path);
@@ -193,6 +198,8 @@ export class DeleteJob {
             }
         }
 
+        // No cancel check from here on: once an original is in the trash, its
+        // replacement has to be written, or the file is simply gone.
         for (const { target, before, after } of ready) {
             this.currentPath = target.label;
             try {
@@ -221,8 +228,10 @@ export class DeleteJob {
                     continue;
                 }
                 this.filesDone++;
+                this.rewritten++;
                 this.bytesFreed += before - written;
                 this.onDeleted(target.id, written);
+                this.onProgress(this);
             } catch (err) {
                 this.fail(target, (err as Error).message.split('\n')[0]);
             }

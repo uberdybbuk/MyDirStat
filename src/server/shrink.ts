@@ -21,6 +21,8 @@ interface ShrinkGroup {
     exts?: readonly string[];
     /** Lower-case file names, matched case-insensitively. */
     names?: readonly string[];
+    /** Lower-case name of the folder NuGet restores packages into (packages.config). */
+    packages?: string;
     /** Lower-case folder name whose `folderExts` files are taken, at any depth. */
     folder?: string;
     folderExts?: readonly string[];
@@ -61,6 +63,12 @@ export const SHRINK_GROUPS: readonly ShrinkGroup[] = [
         exts: ['.nupkg', '.snupkg'],
     },
     {
+        // Whole restored packages: lib/, content/, tools/, XML docs and all.
+        // "Restore NuGet Packages" brings every byte of it back.
+        label: 'NuGet packages (packages/)',
+        packages: 'packages',
+    },
+    {
         label: 'Icons and images',
         exts: ['.ico', '.cur', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp'],
     },
@@ -75,13 +83,14 @@ function entriesOf(g: ShrinkGroup): string[] {
     return [
         ...(g.exts ?? []),
         ...(g.names ?? []),
+        ...(g.packages ? [`nuget:${g.packages}`] : []),
         ...(g.folder ? (g.folderExts ?? []).map((ext) => `${g.folder}/*${ext}`) : []),
     ];
 }
 
 /**
  * Everything Shrink offers, in the form the delete request carries types:
- * `.ext`, `file.name` or `folder/*.ext`.
+ * `.ext`, `file.name`, `folder/*.ext` or `nuget:folder`.
  */
 export const SHRINK_TYPES: readonly string[] = SHRINK_GROUPS.flatMap(entriesOf);
 

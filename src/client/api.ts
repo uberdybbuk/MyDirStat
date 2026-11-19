@@ -106,6 +106,7 @@ export const api = {
         post<DeleteStatus>('/api/delete', { mode, confirm, types, under }),
     /** Development leftovers under a folder, by type, before Shrink removes them. */
     shrink: (id: number) => request<ShrinkPreview>(`/api/shrink?id=${id}`),
+    shrinkCancel: () => post<{ ok: true }>('/api/shrink/cancel', {}),
     deleteCancel: () => post<{ ok: true }>('/api/delete/cancel', {}),
     /** Plain navigation, so the browser handles the save dialog itself. */
     zipDownloadUrl: (id: string) =>

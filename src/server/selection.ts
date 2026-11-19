@@ -72,6 +72,8 @@ interface FilterTerm {
 const WILDCARD = /[*?]/;
 /** `dist/*.js`: an extension, but only beneath a folder with that name. */
 const FOLDER_RULE = /^([^/*?]+)\/\*(\.[^/*?]+)$/;
+/** `nuget:packages`: everything in a restored NuGet package under `packages/`. */
+const PACKAGE_RULE = 'nuget:';
 /**
  * `*.cs` and friends: the shape nearly every preset is made of. One extension
  * segment only — `*.min.js` has to go the general route, since the extension of
@@ -196,9 +198,12 @@ export class Selection {
      *     .ext          an extension ("" for no extension)
      *     thumbs.db     an exact file name, so it can be taken without every .db
      *     dist/*.js     an extension, only beneath a folder of that name
+     *     nuget:packages  every file of a restored NuGet package: a folder that
+     *                   holds a .nupkg directly and sits in a folder of that name
      *
      * `keys` runs parallel to `ids` and says which entry took each file, so a
-     * caller can report per entry. An extension or name wins over a folder rule.
+     * caller can report per entry. Precedence: file name, package, extension,
+     * folder rule.
      *
      * `under` limits it to one subtree. Since `parent[i] < i`, a single forward
      * pass decides membership: a node is inside when its parent is.
@@ -213,9 +218,12 @@ export class Selection {
         const fileNames = new Set<string>();
         // folder name -> extension -> the entry that asked for it
         const folderRules = new Map<string, Map<string, string>>();
+        let packageFolder: string | null = null;
         for (const entry of wanted) {
             const rule = FOLDER_RULE.exec(entry);
-            if (rule) {
+            if (entry.startsWith(PACKAGE_RULE)) {
+                packageFolder = entry.slice(PACKAGE_RULE.length);
+            } else if (rule) {
                 const exts = folderRules.get(rule[1]) ?? new Map<string, string>();
                 exts.set(rule[2], entry);
                 folderRules.set(rule[1], exts);
@@ -256,10 +264,12 @@ export class Selection {
             }
         }
 
+        const inPackage = packageFolder === null ? null : this.packageMembers(packageFolder);
+
         const ids: number[] = [];
         const keys: string[] = [];
         let bytes = 0;
-        if (ranks.size > 0 || fileNames.size > 0 || ruleFolder) {
+        if (ranks.size > 0 || fileNames.size > 0 || ruleFolder || inPackage) {
             for (let i = Math.max(1, under); i < store.count; i++) {
                 if (inside && inside[i] === 0) continue;
                 if (store.flags[i] & (F_DIR | F_ERROR | F_SKIPPED | F_GONE)) continue;
@@ -269,6 +279,7 @@ export class Selection {
                     const lower = store.name(i).toLowerCase();
                     if (fileNames.has(lower)) key = lower;
                 }
+                if (key === undefined && inPackage && inPackage[i] === 1) key = PACKAGE_RULE + packageFolder;
                 if (key === undefined && ranks.has(store.ext[i])) key = ext;
                 if (key === undefined && ruleFolder && ruleFolder[i] >= 0) {
                     key = folderRules.get(folderNames[ruleFolder[i]])!.get(ext);
@@ -280,6 +291,41 @@ export class Selection {
             }
         }
         return { ids, keys, files: ids.length, bytes };
+    }
+
+    /**
+     * Nodes inside a restored NuGet package, 1 per node.
+     *
+     * packages.config restores each package to `<packages>/<Id>.<Version>/`,
+     * with the .nupkg itself directly in that folder. Requiring the .nupkg is
+     * what keeps a JavaScript monorepo's `packages/` source folders out of it:
+     * the folder name alone says nothing.
+     */
+    private packageMembers(folder: string): Uint8Array {
+        const store = this.store;
+        const nupkg = store.extNames.indexOf('.nupkg');
+        const holdsPackage = new Uint8Array(store.count);
+        if (nupkg >= 0) {
+            for (let i = 1; i < store.count; i++) {
+                if (store.ext[i] === nupkg && !(store.flags[i] & (F_DIR | F_GONE))) {
+                    holdsPackage[store.parent[i]] = 1;
+                }
+            }
+        }
+
+        const nameOf = (d: number): string =>
+            (d === 0 ? basename(store.root) : store.name(d)).toLowerCase();
+        const member = new Uint8Array(store.count);
+        for (let i = 1; i < store.count; i++) {
+            const p = store.parent[i];
+            if (p < 0) continue;
+            if (member[p] === 1) {
+                member[i] = 1;
+            } else if (holdsPackage[p] === 1 && p > 0 && nameOf(store.parent[p]) === folder) {
+                member[i] = 1;
+            }
+        }
+        return member;
     }
 
     /** Node ids are only meaningful for one scan, so a rescan starts over. */

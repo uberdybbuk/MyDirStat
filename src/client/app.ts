@@ -6,12 +6,12 @@ import { el, all, escapeHtml, hexToRgb } from './dom.js';
 import { bytes, count, percent, when } from './format.js';
 import { installColumnResizers, TREE_COLUMNS, EXT_COLUMNS } from './columns.js';
 import { initTypes, closeTypes } from './type-dialog.js';
-import { initShrink, openShrink, closeShrink } from './shrink-dialog.js';
+import { initShrink, openShrink, closeShrink, shrinkProgress } from './shrink-dialog.js';
 import { initPathInput } from './path-input.js';
 import { initPicker, openPicker, closePicker, selectedFormat } from './select-dialog.js';
 import { ARCHIVE_FORMATS, F_DIR, F_LINK, F_ERROR, F_SKIPPED, F_DUP } from '../shared/protocol.js';
 import type {
-    ExtensionRow, NodeDetail, ScanProgress, ScanSummary,
+    ExtensionRow, NodeDetail, ScanProgress, ScanSummary, ShrinkProgress,
     DeleteStatus, SelectionSummary, SizeMetric, SpecialColors, TreeRow, TreemapNode, ZipStatus,
 } from '../shared/protocol.js';
 
@@ -642,6 +642,9 @@ function connect(): void {
     events.addEventListener('delete', (e) => {
         renderDelete(JSON.parse((e as MessageEvent<string>).data) as DeleteStatus);
     });
+    events.addEventListener('shrink', (e) => {
+        shrinkProgress(JSON.parse((e as MessageEvent<string>).data) as ShrinkProgress);
+    });
     events.addEventListener('zip', (e) => {
         renderZip(JSON.parse((e as MessageEvent<string>).data) as ZipStatus);
     });
@@ -1138,10 +1141,16 @@ initTypes({
 initShrink({
     remove: (mode, under, types, files, size) => {
         if (mode === 'trash') {
-            void startDelete('trash', undefined, types, under);
+            void startDelete('trash', undefined, types, under, 'shrink');
             return;
         }
-        askPermanent(files, size, () => void startDelete('permanent', files, types, under));
+        askPermanent(files, size, () => void startDelete('permanent', files, types, under, 'shrink'), {
+            title: 'Shrink permanently',
+            body:
+                `${count(files)} files (${bytes(size)} saved) will be removed or rewritten for good. ` +
+                `Neither the removed files nor the original proxies go to the Trash, and they cannot be recovered.`,
+            button: 'Shrink permanently',
+        });
     },
 });
 
@@ -1227,16 +1236,24 @@ function renderDelete(status: DeleteStatus): void {
     el('delModal').hidden = false;
     const running = status.state === 'running';
     const fraction = status.files > 0 ? status.filesDone / status.files : 0;
+    const shrink = status.purpose === 'shrink';
 
-    el('delTitle').textContent =
-        status.state === 'done' ? (status.mode === 'trash' ? 'Moved to Trash' : 'Deleted')
-        : status.state === 'failed' ? 'Delete failed'
-        : status.state === 'cancelled' ? 'Delete cancelled'
-        : status.mode === 'trash' ? 'Moving to Trash' : 'Deleting';
+    el('delTitle').textContent = shrink
+        ? status.state === 'done' ? 'Shrink finished'
+          : status.state === 'failed' ? 'Shrink failed'
+          : status.state === 'cancelled' ? 'Shrink cancelled'
+          : 'Shrinking'
+        : status.state === 'done' ? (status.mode === 'trash' ? 'Moved to Trash' : 'Deleted')
+          : status.state === 'failed' ? 'Delete failed'
+          : status.state === 'cancelled' ? 'Delete cancelled'
+          : status.mode === 'trash' ? 'Moving to Trash' : 'Deleting';
 
     el<HTMLElement>('delBar').style.width = `${Math.round(fraction * 100)}%`;
 
-    const parts = [`${count(status.filesDone)} / ${count(status.files)} files`, `${bytes(status.bytesFreed)} freed`];
+    const parts = [`${count(status.filesDone)} / ${count(status.files)} files`];
+    if (status.rewritten > 0) parts.push(`${count(status.rewritten)} proxies rewritten`);
+    parts.push(`${bytes(status.bytesFreed)} freed`);
+    if (shrink && status.mode === 'trash' && !running) parts.push('originals are in the Trash');
     if (status.failures.length > 0) parts.push(`${count(status.failures.length)} failed`);
     if (status.error) parts.push(status.error);
     el('delDetail').textContent = parts.join(' · ');
@@ -1262,11 +1279,21 @@ async function startDelete(
     mode: 'trash' | 'permanent',
     confirm?: number,
     types?: string[],
-    under?: number
+    under?: number,
+    purpose: 'delete' | 'shrink' = 'delete'
 ): Promise<void> {
+    // The dialog goes up before the request does: the server may take a moment
+    // to gather the files, and a click with no answer reads as a click that
+    // did not work.
+    renderDelete({
+        id: '', state: 'running', mode, purpose, rewritten: 0,
+        files: 0, filesDone: 0, bytesFreed: 0, bytesTotal: 0,
+        currentPath: 'Starting…', failures: [], startedAt: Date.now(),
+    });
     try {
         renderDelete(await api.deleteSelection(mode, confirm, types, under));
     } catch (err) {
+        el('delModal').hidden = true;
         reportError(err);
     }
 }
@@ -1278,11 +1305,22 @@ async function startDelete(
  * types — because the guarantee has to be the same either way: the number the
  * user types is the number the server is then required to agree with.
  */
-function askPermanent(files: number, size: number, go: () => void): void {
+function askPermanent(
+    files: number,
+    size: number,
+    go: () => void,
+    words: { title: string; body: string; button: string } = {
+        title: 'Delete permanently',
+        body:
+            `${count(files)} files (${bytes(size)}) will be removed for good. ` +
+            `They do not go to the Trash and cannot be recovered.`,
+        button: 'Delete permanently',
+    }
+): void {
     if (files === 0) return;
-    el('confirmBody').textContent =
-        `${count(files)} files (${bytes(size)}) will be removed for good. ` +
-        `They do not go to the Trash and cannot be recovered.`;
+    el('confirmTitle').textContent = words.title;
+    el('confirmBody').textContent = words.body;
+    el('confirmGo').textContent = words.button;
     const input = el<HTMLInputElement>('confirmInput');
     input.value = '';
     const button = el<HTMLButtonElement>('confirmGo');

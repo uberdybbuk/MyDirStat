@@ -316,6 +316,14 @@ export interface ShrinkType {
     size: number;
 }
 
+/** How far Shrink's look for generated proxies has got, sent as it goes. */
+export interface ShrinkProgress {
+    id: number;
+    done: number;
+    total: number;
+    found: number;
+}
+
 /** What Shrink found under a folder, shown before anything is removed. */
 export interface ShrinkPreview {
     id: number;
@@ -344,6 +352,10 @@ export interface DeleteStatus {
     id: string;
     state: DeleteState;
     mode: DeleteMode;
+    /** Shrink removes some files and rewrites others; the dialog says so. */
+    purpose: 'delete' | 'shrink';
+    /** Files rewritten smaller rather than removed (Shrink's proxies). */
+    rewritten: number;
     files: number;
     filesDone: number;
     bytesFreed: number;

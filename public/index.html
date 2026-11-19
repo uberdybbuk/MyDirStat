@@ -199,22 +199,32 @@
             <span class="col-num">Files</span>
         </div>
         <div class="scroll picker-scroll" id="shrinkScroll">
+            <div id="shrinkLoading" class="shrink-loading" hidden>
+                <p id="shrinkLoadingText">Looking for files to shrink&hellip;</p>
+                <div class="bar"><i id="shrinkLoadingBar"></i></div>
+                <p id="shrinkLoadingDetail" class="dim"></p>
+            </div>
             <div class="rows" id="shrinkRows"></div>
         </div>
+
+        <p class="shrink-modes dim">
+            <b>Shrink</b> moves the removed files and the original proxies to the Trash, so everything can be restored.
+            <b>Shrink permanently</b> keeps no copy.
+        </p>
 
         <div class="sheet-actions">
             <span id="shrinkNote" class="dim"></span>
             <span class="spacer"></span>
-            <button id="shrinkTrash" class="danger">Move to Trash</button>
-            <button id="shrinkErase" class="danger">Delete permanently&hellip;</button>
             <button id="shrinkCancel">Cancel</button>
+            <button id="shrinkErase" class="danger">Shrink permanently&hellip;</button>
+            <button id="shrinkTrash" class="primary">Shrink</button>
         </div>
     </div>
 </div>
 
 <div id="confirmDelete" class="modal" hidden>
     <div class="sheet">
-        <h2>Delete permanently</h2>
+        <h2 id="confirmTitle">Delete permanently</h2>
         <p id="confirmBody" class="dim"></p>
         <p class="dim">Type the file count to confirm:</p>
         <input id="confirmInput" type="text" inputmode="numeric" autocomplete="off" spellcheck="false">
